@@ -1,0 +1,291 @@
+#!/usr/bin/env python3
+"""SQLite storage behind the web UI.
+
+The CSVs in data/ remain the interchange format that scraper.py and the
+GitHub Action read and write. This database is a queryable mirror of them:
+every lead the web app finds is written to both, and leads_master.csv is
+re-synced into here at startup so leads added by the CLI or the daily
+Action still show up on the dashboard.
+"""
+
+import csv
+import json
+import sqlite3
+from contextlib import contextmanager
+from datetime import datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+from scraper import MASTER_FILE, name_key, phone_key
+
+ROOT = Path(__file__).parent
+DB_PATH = ROOT / "data" / "leads.db"
+LOCAL_TZ = ZoneInfo("America/Chicago")
+
+LEAD_COLUMNS = [
+    "date_found", "business_name", "category_searched", "city_searched",
+    "phone", "address", "website", "rating", "review_count",
+    "lead_priority", "google_maps_url", "priority_score", "pitch_gap",
+    "recommended_pitch",
+]
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS runs (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at         TEXT NOT NULL,
+    finished_at        TEXT,
+    status             TEXT NOT NULL,
+    -- JSON list of {keyword, city, max_results}; each entry has its own count,
+    -- so "40 restaurants in Princeton" and "5 dentists in Anna" coexist.
+    searches           TEXT NOT NULL,
+    lead_filter        TEXT,
+    min_rating         REAL,
+    total_searches     INTEGER NOT NULL DEFAULT 0,
+    done_searches      INTEGER NOT NULL DEFAULT 0,
+    new_leads          INTEGER NOT NULL DEFAULT 0,
+    duplicate_leads    INTEGER NOT NULL DEFAULT 0,
+    error              TEXT,
+    cancel_requested   INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS run_log (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id   INTEGER NOT NULL REFERENCES runs(id),
+    ts       TEXT NOT NULL,
+    level    TEXT NOT NULL DEFAULT 'info',
+    message  TEXT NOT NULL
+);
+
+-- key_phone and key_name are both UNIQUE, so INSERT OR IGNORE drops a lead that
+-- collides on EITHER one. SQLite treats NULLs as distinct, so leads missing a
+-- phone don't all collapse into each other.
+CREATE TABLE IF NOT EXISTS leads (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    key_phone         TEXT UNIQUE,
+    key_name          TEXT UNIQUE,
+    run_id            INTEGER REFERENCES runs(id),
+    date_found        TEXT,
+    business_name     TEXT,
+    category_searched TEXT,
+    city_searched     TEXT,
+    phone             TEXT,
+    address           TEXT,
+    website           TEXT,
+    rating            REAL,
+    review_count      INTEGER,
+    lead_priority     TEXT,
+    google_maps_url   TEXT,
+    priority_score    INTEGER DEFAULT 0,
+    pitch_gap         TEXT,
+    recommended_pitch TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_leads_score ON leads(priority_score DESC);
+CREATE INDEX IF NOT EXISTS idx_leads_run   ON leads(run_id);
+CREATE INDEX IF NOT EXISTS idx_log_run     ON run_log(run_id, id);
+"""
+
+
+@contextmanager
+def connect():
+    DB_PATH.parent.mkdir(exist_ok=True)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    try:
+        yield conn
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def now_iso() -> str:
+    return datetime.now(LOCAL_TZ).isoformat(timespec="seconds")
+
+
+def init_db():
+    with connect() as conn:
+        conn.executescript(SCHEMA)
+    # A run left "running" by a crash or restart can never finish.
+    with connect() as conn:
+        conn.execute(
+            "UPDATE runs SET status='error', error='Interrupted by restart', finished_at=? "
+            "WHERE status='running'",
+            (now_iso(),),
+        )
+
+
+# --------------------------------------------------------------------------
+# Runs
+# --------------------------------------------------------------------------
+
+def create_run(searches: list, lead_filter: str, min_rating: float) -> int:
+    with connect() as conn:
+        cur = conn.execute(
+            "INSERT INTO runs (started_at, status, searches, lead_filter, min_rating,"
+            " total_searches) VALUES (?,?,?,?,?,?)",
+            (now_iso(), "running", json.dumps(searches), lead_filter, min_rating, len(searches)),
+        )
+        return cur.lastrowid
+
+
+def log(run_id: int, message: str, level: str = "info"):
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO run_log (run_id, ts, level, message) VALUES (?,?,?,?)",
+            (run_id, now_iso(), level, message),
+        )
+
+
+def bump_progress(run_id: int, new_leads: int = 0, duplicates: int = 0):
+    with connect() as conn:
+        conn.execute(
+            "UPDATE runs SET done_searches = done_searches + 1, new_leads = new_leads + ?,"
+            " duplicate_leads = duplicate_leads + ? WHERE id = ?",
+            (new_leads, duplicates, run_id),
+        )
+
+
+def finish_run(run_id: int, status: str, error: str | None = None):
+    with connect() as conn:
+        conn.execute(
+            "UPDATE runs SET status = ?, error = ?, finished_at = ? WHERE id = ?",
+            (status, error, now_iso(), run_id),
+        )
+
+
+def request_cancel(run_id: int):
+    with connect() as conn:
+        conn.execute("UPDATE runs SET cancel_requested = 1 WHERE id = ?", (run_id,))
+
+
+def cancel_requested(run_id: int) -> bool:
+    with connect() as conn:
+        row = conn.execute("SELECT cancel_requested FROM runs WHERE id = ?", (run_id,)).fetchone()
+    return bool(row and row["cancel_requested"])
+
+
+def get_run(run_id: int):
+    with connect() as conn:
+        return conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+
+
+def list_runs(limit: int = 20):
+    with connect() as conn:
+        return conn.execute("SELECT * FROM runs ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+
+
+def get_log(run_id: int, after_id: int = 0):
+    with connect() as conn:
+        return conn.execute(
+            "SELECT * FROM run_log WHERE run_id = ? AND id > ? ORDER BY id", (run_id, after_id)
+        ).fetchall()
+
+
+def active_run_id() -> int | None:
+    with connect() as conn:
+        row = conn.execute("SELECT id FROM runs WHERE status='running' ORDER BY id DESC LIMIT 1").fetchone()
+    return row["id"] if row else None
+
+
+# --------------------------------------------------------------------------
+# Leads
+# --------------------------------------------------------------------------
+
+def insert_leads(rows: list, run_id: int | None) -> int:
+    """Insert leads, skipping any that match an existing business on phone or on
+    name+street+city. Returns the number actually added."""
+    if not rows:
+        return 0
+    placeholders = ",".join("?" * (len(LEAD_COLUMNS) + 3))
+    added = 0
+    with connect() as conn:
+        for row in rows:
+            values = [phone_key(row.get("phone")),
+                      name_key(row.get("business_name"), row.get("address"),
+                               row.get("city_searched")),
+                      run_id] + [row.get(col) or None for col in LEAD_COLUMNS]
+            cur = conn.execute(
+                f"INSERT OR IGNORE INTO leads (key_phone, key_name, run_id,"
+                f" {','.join(LEAD_COLUMNS)}) VALUES ({placeholders})",
+                values,
+            )
+            added += cur.rowcount
+    return added
+
+
+def existing_keys() -> set:
+    with connect() as conn:
+        rows = conn.execute("SELECT key_phone, key_name FROM leads").fetchall()
+    return {k for row in rows for k in (row["key_phone"], row["key_name"]) if k}
+
+
+def list_leads(search: str = "", city: str = "", category: str = "",
+               only_no_website: bool = False, limit: int = 500):
+    clauses, params = [], []
+    if search:
+        clauses.append("(business_name LIKE ? OR address LIKE ?)")
+        params += [f"%{search}%", f"%{search}%"]
+    if city:
+        clauses.append("city_searched = ?")
+        params.append(city)
+    if category:
+        clauses.append("category_searched = ?")
+        params.append(category)
+    if only_no_website:
+        clauses.append("(website IS NULL OR website = '')")
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    with connect() as conn:
+        return conn.execute(
+            f"SELECT * FROM leads {where} ORDER BY priority_score DESC, id DESC LIMIT ?",
+            params + [limit],
+        ).fetchall()
+
+
+def distinct_values(column: str) -> list:
+    if column not in ("city_searched", "category_searched"):
+        raise ValueError(f"not a filterable column: {column}")
+    with connect() as conn:
+        rows = conn.execute(
+            f"SELECT DISTINCT {column} AS v FROM leads WHERE v != '' ORDER BY v"
+        ).fetchall()
+    return [r["v"] for r in rows if r["v"]]
+
+
+def stats() -> dict:
+    with connect() as conn:
+        row = conn.execute(
+            """SELECT COUNT(*)                                                    AS total,
+                      SUM(CASE WHEN website IS NULL OR website = '' THEN 1 ELSE 0 END) AS no_website,
+                      SUM(CASE WHEN phone   IS NOT NULL AND phone != '' THEN 1 ELSE 0 END) AS callable,
+                      SUM(CASE WHEN priority_score >= 120 THEN 1 ELSE 0 END)      AS hot,
+                      AVG(NULLIF(rating, 0))                                      AS avg_rating
+               FROM leads"""
+        ).fetchone()
+        by_city = conn.execute(
+            "SELECT city_searched AS label, COUNT(*) AS n FROM leads"
+            " WHERE label != '' GROUP BY label ORDER BY n DESC LIMIT 10"
+        ).fetchall()
+        by_category = conn.execute(
+            "SELECT category_searched AS label, COUNT(*) AS n FROM leads"
+            " WHERE label != '' GROUP BY label ORDER BY n DESC LIMIT 10"
+        ).fetchall()
+    return {
+        "total": row["total"] or 0,
+        "no_website": row["no_website"] or 0,
+        "callable": row["callable"] or 0,
+        "hot": row["hot"] or 0,
+        "avg_rating": round(row["avg_rating"], 1) if row["avg_rating"] else None,
+        "by_city": [dict(r) for r in by_city],
+        "by_category": [dict(r) for r in by_category],
+    }
+
+
+def sync_from_master_csv() -> int:
+    """Pull in any leads written by scraper.py or the GitHub Action."""
+    if not MASTER_FILE.exists():
+        return 0
+    with open(MASTER_FILE, "r", newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    return insert_leads(rows, run_id=None)

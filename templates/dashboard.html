@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+
+{% macro bar_chart(rows, title, empty_msg) %}
+  <div class="card">
+    <h2>{{ title }}</h2>
+    {% if rows %}
+      {% set top = rows | map(attribute='n') | max %}
+      <div class="bars">
+        {% for row in rows %}
+          <div class="bar-row">
+            <div class="bar-label" title="{{ row.label }}">{{ row.label }}</div>
+            <div class="bar-track">
+              <div class="bar-fill" style="width: {{ (row.n / top * 100) | round(1) }}%"></div>
+            </div>
+            <div class="bar-value">{{ row.n }}</div>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="muted" style="margin:0">{{ empty_msg }}</p>
+    {% endif %}
+  </div>
+{% endmacro %}
+
+{% block content %}
+<h1>Dashboard</h1>
+<p class="subtitle">Everything found so far, across every search.</p>
+
+{% if stats.total == 0 %}
+  <div class="card empty">
+    <p style="font-size:15px;margin-top:0"><strong>No leads yet.</strong></p>
+    <p>Run your first search to start building the list.</p>
+    <a class="btn" href="{{ url_for('search') }}">New Search</a>
+  </div>
+{% else %}
+
+<div class="grid cols-4" style="margin-bottom:16px">
+  <div class="stat">
+    <div class="stat-label">Total leads</div>
+    <div class="stat-value">{{ "{:,}".format(stats.total) }}</div>
+    <div class="stat-note">deduped across all runs</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">No website</div>
+    <div class="stat-value">{{ "{:,}".format(stats.no_website) }}</div>
+    <div class="stat-note">{{ (stats.no_website / stats.total * 100) | round | int }}% of all leads</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Callable</div>
+    <div class="stat-value">{{ "{:,}".format(stats.callable) }}</div>
+    <div class="stat-note">have a phone number</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">High priority</div>
+    <div class="stat-value">{{ "{:,}".format(stats.hot) }}</div>
+    <div class="stat-note">score 120+ — call these first</div>
+  </div>
+</div>
+
+<div class="grid cols-2" style="margin-bottom:16px">
+  {{ bar_chart(stats.by_city, "Leads by city", "No city data yet.") }}
+  {{ bar_chart(stats.by_category, "Leads by category", "No category data yet.") }}
+</div>
+
+<div class="card" style="margin-bottom:16px">
+  <h2>Top priority leads</h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Score</th><th>Business</th><th>City</th><th>Phone</th><th>Website</th><th>Why they're a fit</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for lead in top_leads %}
+        <tr>
+          <td class="num"><span class="badge {% if lead.priority_score >= 120 %}hot{% else %}plain{% endif %}">{{ lead.priority_score or 0 }}</span></td>
+          <td>{{ lead.business_name }}</td>
+          <td class="muted">{{ lead.city_searched }}</td>
+          <td class="num">{{ lead.phone or "—" }}</td>
+          <td>{% if lead.website %}<span class="muted">has one</span>{% else %}<span class="badge good">none</span>{% endif %}</td>
+          <td class="muted">{{ lead.pitch_gap or "—" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p style="margin-bottom:0;margin-top:16px"><a href="{{ url_for('leads') }}">View all leads →</a></p>
+</div>
+
+{% endif %}
+
+<div class="card">
+  <h2>Recent searches</h2>
+  {% if runs %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Started</th><th>Status</th><th>Search</th><th>Progress</th><th>New</th><th>Dupes</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for run in runs %}
+        <tr>
+          <td class="num muted">{{ run.started_at | short_time }}</td>
+          <td><span class="status-dot status-{{ run.status }}"></span>{{ run.status }}</td>
+          {% set entries = run.searches | from_json %}
+          <td class="muted">
+            {{ entries | length }} search{{ '' if entries|length == 1 else 'es' }},
+            up to {{ entries | sum(attribute='max_results') }} results
+          </td>
+          <td class="num">{{ run.done_searches }}/{{ run.total_searches }}</td>
+          <td class="num">{{ run.new_leads }}</td>
+          <td class="num muted">{{ run.duplicate_leads }}</td>
+          <td><a href="{{ url_for('run_detail', run_id=run.id) }}">details</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+    <p class="muted" style="margin:0">No searches run yet.</p>
+  {% endif %}
+</div>
+{% endblock %}

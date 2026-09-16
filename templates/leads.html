@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block title %}Leads{% endblock %}
+
+{% block content %}
+<h1>Leads</h1>
+<p class="subtitle">{{ leads | length }} lead{{ '' if leads|length == 1 else 's' }} shown, highest priority first.</p>
+
+<form method="get" class="filters">
+  <div class="filter-item">
+    <label for="q">Search</label>
+    <input type="text" id="q" name="q" value="{{ filters.search }}" placeholder="Name or address">
+  </div>
+  <div class="filter-item">
+    <label for="city">City</label>
+    <select id="city" name="city">
+      <option value="">All cities</option>
+      {% for city in cities %}
+        <option value="{{ city }}" {% if filters.city == city %}selected{% endif %}>{{ city }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="filter-item">
+    <label for="category">Category</label>
+    <select id="category" name="category">
+      <option value="">All categories</option>
+      {% for category in categories %}
+        <option value="{{ category }}" {% if filters.category == category %}selected{% endif %}>{{ category }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="filter-item checkline">
+    <input type="checkbox" id="no_website" name="no_website" value="1"
+           {% if filters.only_no_website %}checked{% endif %}>
+    <label for="no_website" style="margin:0">No website only</label>
+  </div>
+  <div class="filter-item" style="padding-bottom:1px">
+    <button class="btn" type="submit">Apply</button>
+    <a class="btn secondary" href="{{ url_for('leads') }}">Reset</a>
+  </div>
+</form>
+
+<div class="card">
+  <div style="display:flex;align-items:center;margin-bottom:16px">
+    <h2 style="margin:0">Results</h2>
+    <div style="flex:1"></div>
+    <a class="btn secondary" href="{{ url_for('leads_csv') }}?{{ request.query_string.decode() }}">
+      Download CSV
+    </a>
+  </div>
+
+  {% if leads %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Score</th><th>Business</th><th>Category</th><th>City</th>
+          <th>Phone</th><th>Rating</th><th>Reviews</th><th>Website</th><th>Maps</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for lead in leads %}
+        <tr>
+          <td class="num">
+            <span class="badge {% if lead.priority_score >= 120 %}hot{% else %}plain{% endif %}">
+              {{ lead.priority_score or 0 }}
+            </span>
+          </td>
+          <td>
+            {{ lead.business_name }}
+            {% if lead.pitch_gap %}<div class="muted" style="font-size:12px">{{ lead.pitch_gap }}</div>{% endif %}
+          </td>
+          <td class="muted">{{ lead.category_searched }}</td>
+          <td class="muted">{{ lead.city_searched }}</td>
+          <td class="num">{{ lead.phone or "—" }}</td>
+          <td class="num">{{ lead.rating or "—" }}</td>
+          <td class="num muted">{{ lead.review_count or "—" }}</td>
+          <td>
+            {% if lead.website %}
+              <a href="{{ lead.website }}" target="_blank" rel="noopener noreferrer nofollow">visit</a>
+            {% else %}
+              <span class="badge good">none</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if lead.google_maps_url %}
+              <a href="{{ lead.google_maps_url }}" target="_blank" rel="noopener noreferrer nofollow">map</a>
+            {% else %}
+              <span class="muted">—</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+    <div class="empty">
+      <p><strong>No leads match those filters.</strong></p>
+      <a class="btn secondary" href="{{ url_for('leads') }}">Clear filters</a>
+    </div>
+  {% endif %}
+</div>
+{% endblock %}

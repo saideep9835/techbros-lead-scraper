@@ -1,0 +1,71 @@
+name: Daily Lead Scrape
+
+on:
+  schedule:
+    # 16:00 UTC = 11am Central (CDT) / 10am Central (CST) — inside the 9-5
+    # calling window year-round, so the outreach step can actually place calls.
+    - cron: "0 16 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (no real calls or emails)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write   # needed so the workflow can commit new leads back to the repo
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Ensure config.json exists
+        run: |
+          if [ ! -f config.json ]; then
+            cp config.example.json config.json
+          fi
+
+      - name: Run scraper
+        env:
+          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
+        run: python scraper.py
+
+      - name: Prioritize leads
+        run: python prioritize_leads.py
+
+      # Skipped unless OUTREACH_CONFIG_JSON is set, so the repo can never dial
+      # out with the placeholder values from outreach_config.example.json.
+      - name: Run outreach (calls + emails)
+        if: ${{ secrets.OUTREACH_CONFIG_JSON != '' && secrets.RETELL_API_KEY != '' }}
+        env:
+          RETELL_API_KEY: ${{ secrets.RETELL_API_KEY }}
+          EMAIL_ADDRESS: ${{ secrets.EMAIL_ADDRESS }}
+          EMAIL_APP_PASSWORD: ${{ secrets.EMAIL_APP_PASSWORD }}
+          OUTREACH_CONFIG_JSON: ${{ secrets.OUTREACH_CONFIG_JSON }}
+        run: |
+          printf '%s' "$OUTREACH_CONFIG_JSON" > outreach_config.json
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            python outreach.py --dry-run
+          else
+            python outreach.py
+          fi
+
+      - name: Commit new leads back to repo
+        run: |
+          rm -f outreach_config.json
+          git config user.name "lead-scraper-bot"
+          git config user.email "actions@github.com"
+          git add data/
+          git diff --cached --quiet || git commit -m "Add new leads + outreach results - $(date -u +'%Y-%m-%d')"
+          git push

@@ -1,0 +1,190 @@
+{% extends "base.html" %}
+{% block title %}New Search{% endblock %}
+
+{% block content %}
+<h1>New Search</h1>
+<p class="subtitle">Pick what to look for and where.</p>
+
+<div class="mode-tabs">
+  <button type="button" class="mode-tab active" data-mode="grid">Bulk grid</button>
+  <button type="button" class="mode-tab" data-mode="custom">Place by place</button>
+</div>
+<p class="muted" id="mode-hint" style="margin-top:0">
+  Every business type is searched in every city, with the same number of results each.
+</p>
+
+<form method="post" id="search-form">
+  <input type="hidden" name="mode" id="mode" value="grid">
+
+  <!-- ---------------- Bulk grid ---------------- -->
+  <div id="grid-mode">
+    <div class="grid cols-2">
+      <div class="card">
+        <label class="field" style="margin-bottom:0">
+          <span class="field-label">Business types</span>
+          <span class="field-hint">One per line.</span>
+          <textarea name="keywords" id="keywords">{{ defaults.keywords | join('\n') }}</textarea>
+        </label>
+      </div>
+      <div class="card">
+        <label class="field" style="margin-bottom:0">
+          <span class="field-label">Cities</span>
+          <span class="field-hint">One per line. Include the state, e.g. <code>Princeton, TX</code>.</span>
+          <textarea name="cities" id="cities">{{ defaults.cities | join('\n') }}</textarea>
+        </label>
+      </div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <label class="field" style="margin-bottom:0;max-width:260px">
+        <span class="field-label">Results per search</span>
+        <span class="field-hint">Applied to every combination. 1–{{ max_per_search }}.</span>
+        <input type="number" name="max_results" id="max_results" min="1" max="{{ max_per_search }}"
+               value="{{ defaults.max_results }}">
+      </label>
+    </div>
+  </div>
+
+  <!-- ---------------- Place by place ---------------- -->
+  <div id="custom-mode" hidden>
+    <div class="card">
+      <p class="field-hint" style="margin-top:0">
+        One row per search, each with its own count — for example
+        <strong>restaurant · Princeton, TX · 40</strong>.
+      </p>
+      <div class="table-wrap">
+        <table id="rows-table">
+          <thead>
+            <tr><th style="width:38%">Business type</th><th style="width:38%">City</th>
+                <th style="width:16%">How many</th><th></th></tr>
+          </thead>
+          <tbody id="rows-body"></tbody>
+        </table>
+      </div>
+      <button type="button" class="btn secondary" id="add-row" style="margin-top:14px">
+        + Add another search
+      </button>
+    </div>
+  </div>
+
+  <!-- ---------------- Shared options ---------------- -->
+  <div class="card" style="margin-top:16px">
+    <div class="grid cols-2">
+      <label class="field" style="margin-bottom:0">
+        <span class="field-label">Minimum rating</span>
+        <span class="field-hint">0 = no filter</span>
+        <input type="number" name="min_rating" min="0" max="5" step="0.1" value="{{ defaults.min_rating }}">
+      </label>
+      <label class="field" style="margin-bottom:0">
+        <span class="field-label">Lead filter</span>
+        <span class="field-hint">Quality band to keep</span>
+        <select name="lead_filter">
+          {% for option in ["ALL", "HOT_ONLY", "HOT_WARM"] %}
+            <option value="{{ option }}" {% if defaults.lead_filter == option %}selected{% endif %}>{{ option }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    </div>
+  </div>
+
+  <div class="cost-callout" id="cost-callout" style="margin-top:16px">
+    <div><span id="summary">—</span></div>
+    <div style="margin-top:6px">Estimated cost: <strong id="cost">—</strong>
+      <span class="muted">— about ${{ "%.2f"|format(cost_per) }} per result, billed by Apify.</span></div>
+    <div class="muted" id="time-estimate" style="margin-top:4px"></div>
+  </div>
+
+  <button class="btn" type="submit" id="submit-btn">Start search</button>
+  <a class="btn secondary" href="{{ url_for('dashboard') }}">Cancel</a>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const COST_PER = {{ cost_per }};
+  const MAX_TOTAL = {{ max_total }};
+  const MAX_PER = {{ max_per_search }};
+  const DEFAULT_CITY = {{ (defaults.cities | first or '') | tojson }};
+  const DEFAULT_COUNT = {{ defaults.max_results }};
+
+  const $ = (id) => document.getElementById(id);
+  const rowsBody = $('rows-body');
+
+  function addRow(keyword = '', city = DEFAULT_CITY, count = DEFAULT_COUNT) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><input type="text" name="row_keyword" placeholder="restaurant"></td>
+      <td><input type="text" name="row_city" placeholder="Princeton, TX"></td>
+      <td><input type="number" name="row_count" min="1" max="${MAX_PER}"></td>
+      <td><button type="button" class="btn secondary remove-row" title="Remove">&times;</button></td>`;
+    tr.querySelector('[name=row_keyword]').value = keyword;
+    tr.querySelector('[name=row_city]').value = city;
+    tr.querySelector('[name=row_count]').value = count;
+    rowsBody.appendChild(tr);
+    recalc();
+  }
+
+  rowsBody.addEventListener('click', (e) => {
+    if (e.target.classList.contains('remove-row')) {
+      e.target.closest('tr').remove();
+      if (!rowsBody.children.length) addRow();
+      recalc();
+    }
+  });
+  rowsBody.addEventListener('input', recalc);
+  $('add-row').addEventListener('click', () => addRow());
+
+  // Mode switching
+  document.querySelectorAll('.mode-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.mode-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      const mode = tab.dataset.mode;
+      $('mode').value = mode;
+      $('grid-mode').hidden = mode !== 'grid';
+      $('custom-mode').hidden = mode !== 'custom';
+      $('mode-hint').textContent = mode === 'grid'
+        ? 'Every business type is searched in every city, with the same number of results each.'
+        : 'Each row is its own search with its own result count.';
+      recalc();
+    });
+  });
+
+  const countLines = (el) => el.value.split(/[\n,]/).map(s => s.trim()).filter(Boolean).length;
+
+  function tally() {
+    if ($('mode').value === 'custom') {
+      let searches = 0, total = 0;
+      for (const tr of rowsBody.children) {
+        const kw = tr.querySelector('[name=row_keyword]').value.trim();
+        const city = tr.querySelector('[name=row_city]').value.trim();
+        const n = parseInt(tr.querySelector('[name=row_count]').value, 10) || 0;
+        if (kw && city) { searches++; total += n; }
+      }
+      return { searches, total };
+    }
+    const searches = countLines($('keywords')) * countLines($('cities'));
+    return { searches, total: searches * (parseInt($('max_results').value, 10) || 0) };
+  }
+
+  function recalc() {
+    const { searches, total } = tally();
+    $('summary').textContent = searches
+      ? `${searches} search${searches === 1 ? '' : 'es'}, up to ${total} results`
+      : 'Nothing to search yet';
+    $('cost').textContent = total ? `$${(total * COST_PER).toFixed(2)}` : '—';
+
+    const mins = Math.max(1, Math.round(searches * 8 / 60));
+    $('time-estimate').textContent = searches
+      ? `Expect roughly ${mins} minute${mins === 1 ? '' : 's'}.` : '';
+
+    const over = total > MAX_TOTAL;
+    if (over) $('summary').textContent += ` — over the ${MAX_TOTAL} limit`;
+    $('cost-callout').style.borderColor = over ? 'var(--critical)' : '';
+    $('submit-btn').disabled = over || total === 0;
+  }
+
+  ['keywords', 'cities', 'max_results'].forEach(id => $(id).addEventListener('input', recalc));
+  addRow('restaurant');
+  recalc();
+</script>
+{% endblock %}

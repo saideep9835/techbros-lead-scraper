@@ -1,0 +1,11 @@
+config.json
+outreach_config.json
+__pycache__/
+*.pyc
+.env
+venv/
+*.db
+*.db-wal
+*.db-shm
+.DS_Store
+data/*_old_broken.csv

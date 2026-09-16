@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %}Search run{% endblock %}
+
+{% block content %}
+<h1>Search #{{ run.id }}</h1>
+<p class="subtitle">
+  {{ searches | length }} search{{ '' if searches|length == 1 else 'es' }},
+  up to {{ searches | sum(attribute='max_results') }} results —
+  started {{ run.started_at | short_time }}
+</p>
+
+<details class="card" style="margin-bottom:16px">
+  <summary style="cursor:pointer;font-weight:600">What this run is searching for</summary>
+  <div class="table-wrap" style="margin-top:14px">
+    <table>
+      <thead><tr><th>Business type</th><th>City</th><th>How many</th></tr></thead>
+      <tbody>
+        {% for entry in searches %}
+        <tr>
+          <td>{{ entry.keyword }}</td>
+          <td class="muted">{{ entry.city }}</td>
+          <td class="num">{{ entry.max_results }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</details>
+
+<div class="card" style="margin-bottom:16px">
+  <div style="display:flex;align-items:center;gap:10px">
+    <span class="status-dot status-{{ run.status }}" id="status-dot"></span>
+    <strong id="status-text">{{ run.status }}</strong>
+    <div class="spacer" style="flex:1"></div>
+    {% if run.status == 'running' %}
+      <form method="post" action="{{ url_for('cancel_run', run_id=run.id) }}" style="margin:0">
+        <button class="btn danger" type="submit">Cancel run</button>
+      </form>
+    {% endif %}
+  </div>
+
+  <div class="progress-track">
+    <div class="progress-fill" id="progress-fill"
+         style="width: {{ (run.done_searches / run.total_searches * 100) if run.total_searches else 0 }}%"></div>
+  </div>
+  <div class="muted" id="progress-text">
+    {{ run.done_searches }} of {{ run.total_searches }} searches complete
+  </div>
+
+  <div class="grid cols-4" style="margin-top:20px">
+    <div><div class="stat-label">New leads</div><div class="stat-value" id="new-leads" style="font-size:24px">{{ run.new_leads }}</div></div>
+    <div><div class="stat-label">Already known</div><div class="stat-value" id="dupes" style="font-size:24px">{{ run.duplicate_leads }}</div></div>
+    <div><div class="stat-label">Searches</div><div class="stat-value" style="font-size:24px">{{ run.total_searches }}</div></div>
+    <div><div class="stat-label">Finished</div><div class="stat-value" id="finished" style="font-size:24px">{{ run.finished_at | short_time }}</div></div>
+  </div>
+
+  {% if run.error %}
+    <div class="flash error" style="margin-top:18px;margin-bottom:0">{{ run.error }}</div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Activity</h2>
+  <div class="log" id="log"></div>
+  <div id="done-actions" style="margin-top:18px;display:none">
+    <a class="btn" href="{{ url_for('leads') }}">View leads</a>
+    <a class="btn secondary" href="{{ url_for('leads_csv') }}">Download CSV</a>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const RUN_ID = {{ run.id }};
+  const logEl = document.getElementById('log');
+  let lastId = 0;
+  let polling = true;
+
+  function addLines(lines) {
+    for (const line of lines) {
+      const div = document.createElement('div');
+      div.className = line.level;
+      const ts = document.createElement('span');
+      ts.className = 'ts';
+      ts.textContent = line.ts.slice(11, 19);
+      div.appendChild(ts);
+      div.appendChild(document.createTextNode(line.message));
+      logEl.appendChild(div);
+      lastId = Math.max(lastId, line.id);
+    }
+    if (lines.length) logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  async function poll() {
+    if (!polling) return;
+    try {
+      const res = await fetch(`/api/runs/${RUN_ID}?after=${lastId}`);
+      if (!res.ok) throw new Error(res.statusText);
+      const data = await res.json();
+      addLines(data.log);
+
+      const pct = data.total ? (data.done / data.total * 100) : 0;
+      document.getElementById('progress-fill').style.width = pct + '%';
+      document.getElementById('progress-text').textContent =
+        `${data.done} of ${data.total} searches complete`;
+      document.getElementById('new-leads').textContent = data.new_leads;
+      document.getElementById('dupes').textContent = data.duplicates;
+      document.getElementById('status-text').textContent = data.status;
+      document.getElementById('status-dot').className = 'status-dot status-' + data.status;
+
+      if (data.status !== 'running') {
+        polling = false;
+        document.getElementById('done-actions').style.display = 'block';
+        // Refresh once so the finished timestamp and any cancel button state settle.
+        setTimeout(() => window.location.reload(), 800);
+      }
+    } catch (err) {
+      console.error('poll failed', err);
+    }
+    if (polling) setTimeout(poll, 2000);
+  }
+
+  poll();
+</script>
+{% endblock %}

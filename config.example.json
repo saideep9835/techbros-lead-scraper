@@ -1,0 +1,26 @@
+{
+  "_comment": "Copy this file to config.json and edit freely. No code changes needed.",
+
+  "keywords": [
+    "restaurant",
+    "salon",
+    "contractor",
+    "auto repair",
+    "dentist"
+  ],
+
+  "cities": [
+    "Princeton, TX",
+    "McKinney, TX",
+    "Anna, TX",
+    "Melissa, TX",
+    "Farmersville, TX"
+  ],
+
+  "max_results_per_query": 2,
+  "min_rating": 0,
+  "lead_filter": "ALL",
+
+  "_lead_filter_options": "ALL | HOT_ONLY | HOT_WARM — HOT leads are typically the highest-priority prospects (e.g. no website / low online presence) as scored by the actor.",
+  "_cost_estimate": "keywords x cities x max_results_per_query = total results, billed at roughly $0.01 each. Default config here = 5 x 5 x 2 = 50 leads (~$0.50)."
+}

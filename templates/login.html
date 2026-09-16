@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Sign in{% endblock %}
+
+{% block content %}
+<div class="login-wrap">
+  <h1>Tech Bros Lead Scraper</h1>
+
+  {% if setup_needed %}
+    <p class="subtitle">This app has no password set yet, so it won't let anyone in.</p>
+    <div class="card">
+      <p style="margin-top:0">Stop the server, set a password, and start it again:</p>
+      <pre style="background:var(--plane);padding:12px;border-radius:8px;overflow-x:auto;font-size:12px"><code>export APP_PASSWORD="something-only-you-know"
+python app.py</code></pre>
+      <p class="muted" style="margin-bottom:0">Anyone who reaches this page can spend your
+      Apify credit, so it stays locked until a password exists.</p>
+    </div>
+  {% else %}
+    <p class="subtitle">Enter your password to continue.</p>
+    <form method="post" class="card">
+      <label class="field">
+        <span class="field-label">Password</span>
+        <input type="password" name="password" autofocus required autocomplete="current-password">
+      </label>
+      <button class="btn" type="submit" style="width:100%">Sign in</button>
+    </form>
+  {% endif %}
+</div>
+{% endblock %}
