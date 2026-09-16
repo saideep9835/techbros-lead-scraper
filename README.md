@@ -4,11 +4,18 @@ Finds new local business leads every day (no website / low online presence)
 using Google Maps data via Apify, dedupes against everything you've already
 found, and saves the new ones to a CSV.
 
-Runs three ways — pick whichever fits you:
-- **Web app (easiest):** a local dashboard where you pick keywords and cities in
-  a form, watch the scrape run live, and browse/export the results. See below.
-- **Cloud:** GitHub Actions runs it automatically every day. Your laptop can be off.
-- **Command line:** run the scripts manually or via cron / Task Scheduler.
+Runs two ways — pick whichever fits you:
+- **Web app (the main way):** a local dashboard where you pick keywords and
+  cities in a form, watch the scrape run live, and browse/export the results.
+- **Command line:** run the scripts directly.
+
+> **There is no daily schedule, on purpose.** Apify bills per result returned,
+> not per *new* lead — so re-running the same search every day costs full price
+> to rediscover businesses you already have. Search on demand from the dashboard
+> instead, and widen the keywords or cities when you want more.
+>
+> A manual GitHub Action is still available (Actions tab → *Lead Scrape
+> (manual)* → Run workflow) if you ever want a scrape without your laptop on.
 
 ---
 
@@ -143,35 +150,28 @@ New leads are saved to:
 
 ---
 
-## 4. Set it up to run daily on its own (GitHub Actions)
+## 4. Running it in the cloud (optional, manual)
 
-This is the "set it and forget it" option — it runs on GitHub's servers, not your
-computer.
+The repo includes a GitHub Actions workflow for scraping without your laptop on.
+**It has no schedule** — you trigger it yourself.
 
-1. Create a new **private** GitHub repository and push this whole folder to it:
-   ```bash
-   git init
-   git add .
-   git commit -m "Initial lead scraper setup"
-   git branch -M main
-   git remote add origin https://github.com/YOUR_USERNAME/YOUR_REPO.git
-   git push -u origin main
-   ```
-2. In your GitHub repo, go to **Settings → Secrets and variables → Actions**
-3. Click **New repository secret**:
-   - Name: `APIFY_TOKEN`
-   - Value: your Apify token from Step 1
-4. That's it. The workflow in `.github/workflows/daily-scrape.yml` will now run
-   automatically every day at 11 AM Central Time and commit new leads straight
-   into `data/leads_master.csv` in your repo.
+1. Push this folder to a **private** GitHub repository.
+2. Go to **Settings → Secrets and variables → Actions** → **New repository secret**
+   and add `APIFY_TOKEN` (your Apify token from Step 1).
+3. Run it from the **Actions** tab → *Lead Scrape (manual)* → **Run workflow**.
+   Runs default to **dry run**, so they won't place real calls unless you untick
+   that box.
 
-You can also trigger it manually any time: go to the **Actions** tab in your
-repo → **Daily Lead Scrape** → **Run workflow**. Manual runs default to
-**dry run**, so they won't place real calls unless you untick that box.
+The workflow commits whatever it finds into `data/` in your repo. To see those
+leads on your local dashboard, `git pull` and restart `app.py` — it imports
+`leads_master.csv` at startup.
 
-### Changing the schedule
-Edit the `cron` line in `.github/workflows/daily-scrape.yml`. It uses UTC time.
-Example: `"0 16 * * *"` = 11 AM Central (Daylight Time).
+> **Why no daily schedule?** Apify charges per result returned, not per new
+> lead. The same search run daily returns the same businesses, which get
+> deduplicated away — so you'd pay full price for almost nothing. Search on
+> demand from the dashboard instead. If you later want a schedule, add a
+> `schedule:` trigger back to the workflow, but rotate the keywords or cities
+> so each run covers fresh ground.
 
 > Keep the schedule inside your calling window. `outreach.py` only dials during
 > the `business_hours_start`–`business_hours_end` range in

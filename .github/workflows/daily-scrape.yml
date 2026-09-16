@@ -1,10 +1,10 @@
-name: Daily Lead Scrape
+name: Lead Scrape (manual)
 
+# No schedule on purpose. Searching happens on demand in the web UI, so the
+# repo never pays to re-scrape businesses it already has. This workflow is
+# kept as a manual fallback: run it from the Actions tab when you want a
+# scrape without your laptop on.
 on:
-  schedule:
-    # 16:00 UTC = 11am Central (CDT) / 10am Central (CST) — inside the 9-5
-    # calling window year-round, so the outreach step can actually place calls.
-    - cron: "0 16 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -18,6 +18,14 @@ permissions:
 jobs:
   scrape:
     runs-on: ubuntu-latest
+    # Secrets can't be referenced from a step's `if:`, so they're lifted to
+    # job-level env here — which step conditions *can* read.
+    env:
+      APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
+      RETELL_API_KEY: ${{ secrets.RETELL_API_KEY }}
+      EMAIL_ADDRESS: ${{ secrets.EMAIL_ADDRESS }}
+      EMAIL_APP_PASSWORD: ${{ secrets.EMAIL_APP_PASSWORD }}
+      OUTREACH_CONFIG_JSON: ${{ secrets.OUTREACH_CONFIG_JSON }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -37,8 +45,6 @@ jobs:
           fi
 
       - name: Run scraper
-        env:
-          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
         run: python scraper.py
 
       - name: Prioritize leads
@@ -47,12 +53,7 @@ jobs:
       # Skipped unless OUTREACH_CONFIG_JSON is set, so the repo can never dial
       # out with the placeholder values from outreach_config.example.json.
       - name: Run outreach (calls + emails)
-        if: ${{ secrets.OUTREACH_CONFIG_JSON != '' && secrets.RETELL_API_KEY != '' }}
-        env:
-          RETELL_API_KEY: ${{ secrets.RETELL_API_KEY }}
-          EMAIL_ADDRESS: ${{ secrets.EMAIL_ADDRESS }}
-          EMAIL_APP_PASSWORD: ${{ secrets.EMAIL_APP_PASSWORD }}
-          OUTREACH_CONFIG_JSON: ${{ secrets.OUTREACH_CONFIG_JSON }}
+        if: env.OUTREACH_CONFIG_JSON != '' && env.RETELL_API_KEY != ''
         run: |
           printf '%s' "$OUTREACH_CONFIG_JSON" > outreach_config.json
           if [ "${{ inputs.dry_run }}" = "true" ]; then
