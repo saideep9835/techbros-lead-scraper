@@ -41,22 +41,21 @@ IMPORTANT — please read before turning this fully on:
 
 import argparse
 import csv
-import ipaddress
 import json
 import os
 import re
 import smtplib
-import socket
 import sys
 import time
 from datetime import datetime
 from email.mime.text import MIMEText
 from pathlib import Path
-from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 import requests
 from dotenv import load_dotenv
+
+from enrich import is_public_url, retell_variables
 
 load_dotenv()
 
@@ -172,16 +171,14 @@ def trigger_retell_call(config: dict, lead: dict, phone: str, dry_run: bool) -> 
         return "SKIPPED", "RETELL_API_KEY not set"
 
     # Every variable the agent prompt references must be sent, or Retell speaks
-    # the raw "{{placeholder}}" text out loud on the call.
+    # the raw "{{placeholder}}" text out loud on the call. retell_variables()
+    # adds the Gemini content when a lead has been enriched, and falls back to
+    # the deterministic pitch_gap when it hasn't.
     payload = {
         "from_number": config["retell_from_number"],
         "to_number": phone,
         "override_agent_id": config["retell_agent_id"],
-        "retell_llm_dynamic_variables": {
-            "business_name": lead.get("business_name", "there"),
-            "business_category": lead.get("category_searched", "local"),
-            "recommended_pitch": lead.get("recommended_pitch", "website"),
-        },
+        "retell_llm_dynamic_variables": retell_variables(lead),
     }
     if dry_run:
         return "DRY_RUN", json.dumps(payload["retell_llm_dynamic_variables"])
@@ -197,23 +194,6 @@ def trigger_retell_call(config: dict, lead: dict, phone: str, dry_run: bool) -> 
         return "FAILED", f"HTTP {resp.status_code}: {resp.text[:200]}"
     except Exception as e:
         return "FAILED", str(e)
-
-
-def is_public_url(url: str) -> bool:
-    """Lead URLs come from scraped data, so refuse anything that would make us
-    fetch our own network — loopback, LAN, or cloud metadata addresses."""
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https") or not parsed.hostname:
-        return False
-    try:
-        infos = socket.getaddrinfo(parsed.hostname, None)
-    except socket.gaierror:
-        return False
-    for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
-            return False
-    return True
 
 
 def find_email_on_website(website: str) -> str | None:

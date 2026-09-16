@@ -199,14 +199,47 @@ That writes `data/new_leads_prioritized_YYYY-MM-DD.csv`, adding three columns:
 
 `outreach.py` picks this file up automatically when it exists.
 
-The full daily pipeline is:
+The full pipeline is:
 
 ```bash
 python scraper.py           # find new leads
 python prioritize_leads.py  # score + sort them
+python enrich.py            # AI talking points / email drafts
 python outreach.py --dry-run   # preview who'd be contacted
 python outreach.py          # actually call/email
 ```
+
+---
+
+## 5b. Enrich leads with Gemini
+
+`enrich.py` reads each business's website and writes outreach material tailored
+to that specific business. Add `GEMINI_API_KEY` to your `.env` (get one at
+https://aistudio.google.com/apikey), then use the **Enrich** tab in the web app,
+or run it directly:
+
+```bash
+python enrich.py              # up to 25 un-enriched leads, best first
+python enrich.py --limit 100
+python enrich.py --dry-run    # fetch sites, call no API
+python enrich.py --force      # re-analyze leads already done
+```
+
+What it produces depends on how the lead can be reached:
+
+| Lead has… | You get |
+|---|---|
+| A phone number | `call_opener`, `business_summary` and `talking_points`, passed to the Retell agent as dynamic variables |
+| No phone number | A **draft email**, saved for review under the **Drafts** tab — never sent |
+
+**Results are cached.** A lead with `enriched_at` set is never re-analyzed, so
+running this repeatedly never pays twice for the same business. Failures are
+recorded without destroying content you already had, and the lead is retried
+on the next run.
+
+Enrichment is optional — `outreach.py` falls back to the deterministic
+`pitch_gap` line for any lead Gemini hasn't seen, so calling never depends on
+having run this.
 
 ---
 
@@ -329,9 +362,10 @@ techbros-lead-scraper/
 ├── app.py                              # Web UI — search form, dashboard, lead browser
 ├── db.py                               # SQLite store behind the web UI
 ├── templates/  static/                 # Web UI pages and styling
-├── scraper.py                          # 1. Finds new leads daily
+├── scraper.py                          # 1. Finds new leads
 ├── prioritize_leads.py                 # 2. Scores + sorts them best-first
-├── outreach.py                         # 3. Auto-calls (Retell AI) or emails leads
+├── enrich.py                           # 3. Gemini: call notes / email drafts
+├── outreach.py                         # 4. Auto-calls (Retell AI) or emails leads
 ├── retell_agent_prompt.txt             # Starting prompt for your Retell AI agent
 ├── config.example.json                 # Copy to config.json and edit (scraper settings)
 ├── outreach_config.example.json        # Copy to outreach_config.json and edit (outreach settings)

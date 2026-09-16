@@ -77,7 +77,16 @@ CREATE TABLE IF NOT EXISTS leads (
     google_maps_url   TEXT,
     priority_score    INTEGER DEFAULT 0,
     pitch_gap         TEXT,
-    recommended_pitch TEXT
+    recommended_pitch TEXT,
+    -- Filled in by enrich.py (Gemini). enriched_at doubles as the cache marker:
+    -- a lead with a timestamp is never re-analyzed, so we never pay twice.
+    enriched_at         TEXT,
+    ai_summary          TEXT,
+    ai_hooks            TEXT,
+    ai_call_opener      TEXT,
+    draft_email_subject TEXT,
+    draft_email_body    TEXT,
+    enrich_error        TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_leads_score ON leads(priority_score DESC);
@@ -104,9 +113,22 @@ def now_iso() -> str:
     return datetime.now(LOCAL_TZ).isoformat(timespec="seconds")
 
 
+ENRICH_COLUMNS = {
+    "enriched_at": "TEXT", "ai_summary": "TEXT", "ai_hooks": "TEXT",
+    "ai_call_opener": "TEXT", "draft_email_subject": "TEXT",
+    "draft_email_body": "TEXT", "enrich_error": "TEXT",
+}
+
+
 def init_db():
     with connect() as conn:
         conn.executescript(SCHEMA)
+        # CREATE TABLE IF NOT EXISTS won't add columns to a table made by an
+        # earlier version, so backfill any that are missing.
+        existing = {r[1] for r in conn.execute("PRAGMA table_info(leads)")}
+        for column, coltype in ENRICH_COLUMNS.items():
+            if column not in existing:
+                conn.execute(f"ALTER TABLE leads ADD COLUMN {column} {coltype}")
     # A run left "running" by a crash or restart can never finish.
     with connect() as conn:
         conn.execute(
@@ -280,6 +302,56 @@ def stats() -> dict:
         "by_city": [dict(r) for r in by_city],
         "by_category": [dict(r) for r in by_category],
     }
+
+
+def leads_needing_enrichment(limit: int = 50, force: bool = False) -> list:
+    """Highest-priority leads first, so a capped run enriches the ones you'd
+    actually call first. Already-enriched leads are skipped unless forced."""
+    where = "" if force else "WHERE enriched_at IS NULL"
+    with connect() as conn:
+        return conn.execute(
+            f"SELECT * FROM leads {where} ORDER BY priority_score DESC, id LIMIT ?", (limit,)
+        ).fetchall()
+
+
+def save_enrichment(lead_id: int, data: dict):
+    with connect() as conn:
+        conn.execute(
+            "UPDATE leads SET enriched_at=?, ai_summary=?, ai_hooks=?, ai_call_opener=?,"
+            " draft_email_subject=?, draft_email_body=?, enrich_error=NULL WHERE id=?",
+            (now_iso(), data.get("summary"), json.dumps(data.get("hooks") or []),
+             data.get("call_opener"), data.get("email_subject"), data.get("email_body"),
+             lead_id),
+        )
+
+
+def save_enrichment_error(lead_id: int, message: str):
+    """Records the failure without touching existing content — a quota error on
+    a re-run must not wipe good notes we already had. enriched_at is left alone
+    too, so the lead is retried next time rather than being marked done."""
+    with connect() as conn:
+        conn.execute("UPDATE leads SET enrich_error=? WHERE id=?", (message, lead_id))
+
+
+def enrichment_stats() -> dict:
+    with connect() as conn:
+        row = conn.execute(
+            """SELECT COUNT(*) AS total,
+                      SUM(CASE WHEN enriched_at IS NOT NULL THEN 1 ELSE 0 END)  AS enriched,
+                      SUM(CASE WHEN enrich_error IS NOT NULL THEN 1 ELSE 0 END) AS failed,
+                      SUM(CASE WHEN draft_email_body IS NOT NULL THEN 1 ELSE 0 END) AS drafts
+               FROM leads"""
+        ).fetchone()
+    return {k: row[k] or 0 for k in ("total", "enriched", "failed", "drafts")}
+
+
+def list_drafts(limit: int = 200) -> list:
+    """Leads with no phone that got an email draft instead."""
+    with connect() as conn:
+        return conn.execute(
+            "SELECT * FROM leads WHERE draft_email_body IS NOT NULL AND draft_email_body != ''"
+            " ORDER BY priority_score DESC, id LIMIT ?", (limit,)
+        ).fetchall()
 
 
 def sync_from_master_csv() -> int:

@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Email drafts{% endblock %}
+
+{% block content %}
+<h1>Email drafts</h1>
+<p class="subtitle">
+  Leads with no phone number, so they can't be called. Gemini wrote these —
+  read them before anything goes out.
+</p>
+
+<div class="flash info">
+  <strong>Nothing here has been sent.</strong> These are drafts only. Sending
+  is still disabled in <code>outreach_config.json</code> (<code>enable_email</code>),
+  and needs a real postal address and opt-out line first — see the README.
+</div>
+
+{% if drafts %}
+  {% for lead in drafts %}
+  <div class="card" style="margin-bottom:16px">
+    <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+      <h2 style="margin:0">{{ lead.business_name }}</h2>
+      <span class="badge {% if lead.priority_score >= 120 %}hot{% else %}plain{% endif %}">
+        score {{ lead.priority_score or 0 }}
+      </span>
+      <span class="muted">{{ lead.category_searched }} · {{ lead.city_searched }}</span>
+      <div style="flex:1"></div>
+      {% if lead.website %}
+        <a href="{{ lead.website }}" target="_blank" rel="noopener noreferrer nofollow">website</a>
+      {% else %}
+        <span class="badge good">no website</span>
+      {% endif %}
+    </div>
+
+    {% if lead.ai_summary %}
+      <p class="muted" style="margin:12px 0 0">{{ lead.ai_summary }}</p>
+    {% endif %}
+
+    <div style="margin-top:16px">
+      <div class="field-label">Subject</div>
+      <div style="padding:8px 11px;background:var(--plane);border-radius:8px;border:1px solid var(--border)">
+        {{ lead.draft_email_subject }}
+      </div>
+    </div>
+
+    <div style="margin-top:12px">
+      <div class="field-label">Body</div>
+      <div style="padding:12px;background:var(--plane);border-radius:8px;border:1px solid var(--border);white-space:pre-wrap">{{ lead.draft_email_body }}</div>
+    </div>
+  </div>
+  {% endfor %}
+{% else %}
+  <div class="card empty">
+    <p><strong>No drafts yet.</strong></p>
+    <p>Drafts are written for leads that have no phone number, when you run
+      enrichment.</p>
+    <a class="btn" href="{{ url_for('enrich_page') }}">Go to Enrich</a>
+  </div>
+{% endif %}
+{% endblock %}

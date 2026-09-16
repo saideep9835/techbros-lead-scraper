@@ -13,6 +13,8 @@
   <a class="nav-link {% if request.endpoint == 'dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}">Dashboard</a>
   <a class="nav-link {% if request.endpoint == 'search' %}active{% endif %}" href="{{ url_for('search') }}">New Search</a>
   <a class="nav-link {% if request.endpoint == 'leads' %}active{% endif %}" href="{{ url_for('leads') }}">Leads</a>
+  <a class="nav-link {% if request.endpoint == 'enrich_page' %}active{% endif %}" href="{{ url_for('enrich_page') }}">Enrich</a>
+  <a class="nav-link {% if request.endpoint == 'drafts' %}active{% endif %}" href="{{ url_for('drafts') }}">Drafts</a>
   <div class="spacer"></div>
   <a class="nav-link" href="{{ url_for('logout') }}">Log out</a>
 </nav>

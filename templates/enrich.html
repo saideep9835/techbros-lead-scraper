@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block title %}Enrich{% endblock %}
+
+{% block content %}
+<h1>Enrich leads with Gemini</h1>
+<p class="subtitle">
+  Reads each business's website, then writes call talking points — or an email
+  draft when there's no phone number to call.
+</p>
+
+{% if not has_key %}
+  <div class="flash error">
+    <strong>GEMINI_API_KEY isn't set.</strong> Add it to your <code>.env</code> file
+    and restart the app:
+    <pre style="margin:10px 0 0;font-size:12px">GEMINI_API_KEY=your_key_here</pre>
+  </div>
+{% endif %}
+
+<div class="grid cols-4" style="margin-bottom:16px">
+  <div class="stat">
+    <div class="stat-label">Total leads</div>
+    <div class="stat-value" id="s-total">{{ stats.total }}</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Enriched</div>
+    <div class="stat-value" id="s-enriched">{{ stats.enriched }}</div>
+    <div class="stat-note">cached — never re-analyzed</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Email drafts</div>
+    <div class="stat-value" id="s-drafts">{{ stats.drafts }}</div>
+    <div class="stat-note">leads with no phone</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Failed</div>
+    <div class="stat-value" id="s-failed">{{ stats.failed }}</div>
+  </div>
+</div>
+
+<form method="post" class="card" style="margin-bottom:16px">
+  <div class="filters" style="margin-bottom:0">
+    <div class="filter-item">
+      <label for="limit">How many leads</label>
+      <input type="number" id="limit" name="limit" value="25" min="1" max="500">
+    </div>
+    <div class="filter-item checkline">
+      <input type="checkbox" id="force" name="force" value="1">
+      <label for="force" style="margin:0">Re-analyze ones already done</label>
+    </div>
+    <div class="filter-item" style="padding-bottom:1px">
+      <button class="btn" type="submit" id="run-btn"
+              {% if state.running or not has_key %}disabled{% endif %}>
+        {% if state.running %}Running…{% else %}Analyze leads{% endif %}
+      </button>
+    </div>
+  </div>
+  <p class="muted" style="margin:14px 0 0">
+    Highest-priority leads go first. Already-enriched leads are skipped, so
+    running this repeatedly never costs you twice for the same business.
+  </p>
+</form>
+
+<div class="card">
+  <h2>Activity</h2>
+  <div class="log" id="log">
+    {% for line in state.log %}<div class="{{ line.level }}">{{ line.message }}</div>{% endfor %}
+    {% if not state.log %}<div class="muted">Nothing run yet.</div>{% endif %}
+  </div>
+  <div id="done-actions" style="margin-top:18px;{% if not state.summary %}display:none{% endif %}">
+    <a class="btn secondary" href="{{ url_for('leads') }}">View leads</a>
+    <a class="btn secondary" href="{{ url_for('drafts') }}">View email drafts</a>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const RUNNING = {{ 'true' if state.running else 'false' }};
+  const logEl = document.getElementById('log');
+
+  async function poll() {
+    try {
+      const res = await fetch('/api/enrich');
+      const data = await res.json();
+
+      logEl.innerHTML = data.log.length
+        ? data.log.map(l => `<div class="${l.level}"></div>`).join('')
+        : '<div class="muted">Nothing run yet.</div>';
+      data.log.forEach((l, i) => { logEl.children[i].textContent = l.message; });
+      logEl.scrollTop = logEl.scrollHeight;
+
+      for (const [key, value] of Object.entries(data.stats)) {
+        const el = document.getElementById('s-' + key);
+        if (el) el.textContent = value;
+      }
+
+      if (!data.running) {
+        document.getElementById('run-btn').disabled = {{ 'false' if has_key else 'true' }};
+        document.getElementById('run-btn').textContent = 'Analyze leads';
+        if (data.summary) document.getElementById('done-actions').style.display = 'block';
+        return;
+      }
+      setTimeout(poll, 2000);
+    } catch (err) {
+      console.error('poll failed', err);
+      setTimeout(poll, 4000);
+    }
+  }
+
+  if (RUNNING) poll();
+</script>
+{% endblock %}

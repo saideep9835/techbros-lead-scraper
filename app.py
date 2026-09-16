@@ -27,6 +27,7 @@ from flask import (Flask, Response, abort, flash, redirect, render_template,
 load_dotenv()  # must run before anything reads os.environ below
 
 import db
+from enrich import enrich_all
 from prioritize_leads import score_and_pitch
 from scraper import (DATA_DIR, FIELDNAMES, MASTER_FILE, lead_keys,
                      normalize_item, run_apify_search)
@@ -315,6 +316,56 @@ def cancel_run(run_id):
     db.request_cancel(run_id)
     flash("Cancelling after the current search finishes.", "info")
     return redirect(url_for("run_detail", run_id=run_id))
+
+
+enrich_state = {"running": False, "log": [], "summary": None}
+
+
+def run_enrichment(limit: int, force: bool):
+    enrich_state.update(running=True, log=[], summary=None)
+    try:
+        stats = enrich_all(limit, force, dry_run=False,
+                           on_progress=lambda msg, level="info":
+                               enrich_state["log"].append({"message": msg, "level": level}))
+        enrich_state["summary"] = stats
+    except Exception as exc:
+        enrich_state["log"].append({"message": str(exc), "level": "error"})
+        enrich_state["summary"] = {"error": str(exc)}
+    finally:
+        enrich_state["running"] = False
+
+
+@app.route("/enrich", methods=["GET", "POST"])
+@login_required
+def enrich_page():
+    if request.method == "POST":
+        if enrich_state["running"]:
+            flash("Enrichment is already running.", "error")
+        elif not os.environ.get("GEMINI_API_KEY"):
+            flash("GEMINI_API_KEY is not set — add it to your .env file and restart.", "error")
+        else:
+            limit = request.form.get("limit", 25, type=int)
+            force = request.form.get("force") == "1"
+            threading.Thread(target=run_enrichment, args=(limit, force), daemon=True).start()
+            flash(f"Analyzing up to {limit} leads — this page updates as it goes.", "info")
+        return redirect(url_for("enrich_page"))
+
+    return render_template("enrich.html", stats=db.enrichment_stats(),
+                           state=enrich_state,
+                           has_key=bool(os.environ.get("GEMINI_API_KEY")))
+
+
+@app.route("/api/enrich")
+@login_required
+def enrich_status():
+    return {"running": enrich_state["running"], "log": enrich_state["log"],
+            "summary": enrich_state["summary"], "stats": db.enrichment_stats()}
+
+
+@app.route("/drafts")
+@login_required
+def drafts():
+    return render_template("drafts.html", drafts=db.list_drafts())
 
 
 @app.route("/leads")
