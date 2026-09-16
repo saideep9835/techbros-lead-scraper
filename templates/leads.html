@@ -3,7 +3,10 @@
 
 {% block content %}
 <h1>Leads</h1>
-<p class="subtitle">{{ leads | length }} lead{{ '' if leads|length == 1 else 's' }} shown, highest priority first.</p>
+<p class="subtitle">
+  {{ "{:,}".format(total) }} lead{{ '' if total == 1 else 's' }} match — highest priority first.
+  {% if pages > 1 %}Showing page {{ page }} of {{ pages }}.{% endif %}
+</p>
 
 <form method="get" class="filters">
   <div class="filter-item">
@@ -100,4 +103,21 @@
     </div>
   {% endif %}
 </div>
+
+{% if pages > 1 %}
+  {% set base = dict(request.args) %}
+  <div class="pager">
+    {% if page > 1 %}
+      <a class="btn secondary" href="{{ url_for('leads', **dict(base, page=page-1)) }}">← Previous</a>
+    {% else %}
+      <span class="btn secondary" aria-disabled="true" style="opacity:.45">← Previous</span>
+    {% endif %}
+    <span class="muted">Page {{ page }} of {{ pages }}</span>
+    {% if page < pages %}
+      <a class="btn secondary" href="{{ url_for('leads', **dict(base, page=page+1)) }}">Next →</a>
+    {% else %}
+      <span class="btn secondary" aria-disabled="true" style="opacity:.45">Next →</span>
+    {% endif %}
+  </div>
+{% endif %}
 {% endblock %}

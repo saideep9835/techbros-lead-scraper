@@ -27,6 +27,41 @@
 <h1>Dashboard</h1>
 <p class="subtitle">Everything found so far, across every search.</p>
 
+<div class="card" style="margin-bottom:16px;display:flex;align-items:center;gap:24px;flex-wrap:wrap">
+  <div>
+    <div class="stat-label">Spent today</div>
+    <div class="stat-value" style="font-size:22px">${{ "%.2f"|format(spend.today) }}</div>
+  </div>
+  <div>
+    <div class="stat-label">All time</div>
+    <div class="stat-value" style="font-size:22px">${{ "%.2f"|format(spend.all_time) }}</div>
+  </div>
+  {% for service, detail in spend.by_service.items() %}
+  <div>
+    <div class="stat-label">{{ service }} today</div>
+    <div class="stat-value" style="font-size:22px">${{ "%.2f"|format(detail.usd) }}</div>
+    <div class="stat-note">{{ detail.units }} units</div>
+  </div>
+  {% endfor %}
+  <div style="flex:1"></div>
+  <div style="min-width:180px">
+    {% if limit_usd %}
+      {% set pct = (spend.today / limit_usd * 100) if limit_usd else 0 %}
+      <div class="stat-label">Daily limit ${{ "%.2f"|format(limit_usd) }}</div>
+      <div class="progress-track" style="margin:8px 0 4px">
+        <div class="progress-fill" style="width: {{ [pct, 100] | min | round(1) }}%;
+             {% if pct >= 90 %}background: var(--critical);{% endif %}"></div>
+      </div>
+      <div class="muted" style="font-size:12px">{{ pct | round | int }}% used</div>
+    {% else %}
+      <div class="muted" style="font-size:12px">
+        No daily spend limit set. Add <code>DAILY_SPEND_LIMIT_USD</code> to
+        <code>.env</code> to cap it.
+      </div>
+    {% endif %}
+  </div>
+</div>
+
 {% if stats.total == 0 %}
   <div class="card empty">
     <p style="font-size:15px;margin-top:0"><strong>No leads yet.</strong></p>
@@ -92,7 +127,7 @@
 {% endif %}
 
 <div class="card">
-  <h2>Recent searches</h2>
+  <h2>Recent runs</h2>
   {% if runs %}
   <div class="table-wrap">
     <table>
@@ -106,8 +141,12 @@
           <td><span class="status-dot status-{{ run.status }}"></span>{{ run.status }}</td>
           {% set entries = run.searches | from_json %}
           <td class="muted">
-            {{ entries | length }} search{{ '' if entries|length == 1 else 'es' }},
-            up to {{ entries | sum(attribute='max_results') }} results
+            {% if run.kind == 'enrich' %}
+              Gemini enrichment, up to {{ run.total_searches }} leads
+            {% else %}
+              {{ entries | length }} search{{ '' if entries|length == 1 else 'es' }},
+              up to {{ entries | sum(attribute='max_results') }} results
+            {% endif %}
           </td>
           <td class="num">{{ run.done_searches }}/{{ run.total_searches }}</td>
           <td class="num">{{ run.new_leads }}</td>

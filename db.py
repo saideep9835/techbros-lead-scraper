@@ -32,6 +32,9 @@ LEAD_COLUMNS = [
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
     id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    -- 'scrape' or 'enrich'. Both share this table so progress, logging and
+    -- cancellation survive an app restart instead of living in memory.
+    kind               TEXT NOT NULL DEFAULT 'scrape',
     started_at         TEXT NOT NULL,
     finished_at        TEXT,
     status             TEXT NOT NULL,
@@ -89,9 +92,21 @@ CREATE TABLE IF NOT EXISTS leads (
     enrich_error        TEXT
 );
 
+-- Every billable unit, so a daily ceiling can be enforced and the running
+-- total is visible rather than discovered on an invoice.
+CREATE TABLE IF NOT EXISTS spend (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts      TEXT NOT NULL,
+    day     TEXT NOT NULL,
+    service TEXT NOT NULL,
+    units   INTEGER NOT NULL,
+    usd     REAL NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_leads_score ON leads(priority_score DESC);
 CREATE INDEX IF NOT EXISTS idx_leads_run   ON leads(run_id);
 CREATE INDEX IF NOT EXISTS idx_log_run     ON run_log(run_id, id);
+CREATE INDEX IF NOT EXISTS idx_spend_day   ON spend(day);
 """
 
 
@@ -142,14 +157,21 @@ def init_db():
 # Runs
 # --------------------------------------------------------------------------
 
-def create_run(searches: list, lead_filter: str, min_rating: float) -> int:
+def create_run(searches: list, lead_filter: str = None, min_rating: float = None,
+               kind: str = "scrape", total: int = None) -> int:
     with connect() as conn:
         cur = conn.execute(
-            "INSERT INTO runs (started_at, status, searches, lead_filter, min_rating,"
-            " total_searches) VALUES (?,?,?,?,?,?)",
-            (now_iso(), "running", json.dumps(searches), lead_filter, min_rating, len(searches)),
+            "INSERT INTO runs (kind, started_at, status, searches, lead_filter, min_rating,"
+            " total_searches) VALUES (?,?,?,?,?,?,?)",
+            (kind, now_iso(), "running", json.dumps(searches), lead_filter, min_rating,
+             len(searches) if total is None else total),
         )
         return cur.lastrowid
+
+
+def set_total(run_id: int, total: int):
+    with connect() as conn:
+        conn.execute("UPDATE runs SET total_searches=? WHERE id=?", (total, run_id))
 
 
 def log(run_id: int, message: str, level: str = "info"):
@@ -205,10 +227,52 @@ def get_log(run_id: int, after_id: int = 0):
         ).fetchall()
 
 
-def active_run_id() -> int | None:
+def active_run_id(kind: str = "scrape") -> int | None:
     with connect() as conn:
-        row = conn.execute("SELECT id FROM runs WHERE status='running' ORDER BY id DESC LIMIT 1").fetchone()
+        row = conn.execute(
+            "SELECT id FROM runs WHERE status='running' AND kind=? ORDER BY id DESC LIMIT 1",
+            (kind,),
+        ).fetchone()
     return row["id"] if row else None
+
+
+# --------------------------------------------------------------------------
+# Spend
+# --------------------------------------------------------------------------
+
+def record_spend(service: str, units: int, usd: float):
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO spend (ts, day, service, units, usd) VALUES (?,?,?,?,?)",
+            (now_iso(), datetime.now(LOCAL_TZ).strftime("%Y-%m-%d"), service, units, usd),
+        )
+
+
+def spend_today() -> float:
+    today = datetime.now(LOCAL_TZ).strftime("%Y-%m-%d")
+    with connect() as conn:
+        row = conn.execute("SELECT SUM(usd) AS total FROM spend WHERE day=?", (today,)).fetchone()
+    return round(row["total"] or 0.0, 2)
+
+
+def spend_summary() -> dict:
+    today = datetime.now(LOCAL_TZ).strftime("%Y-%m-%d")
+    with connect() as conn:
+        by_service = conn.execute(
+            "SELECT service, SUM(usd) AS usd, SUM(units) AS units FROM spend"
+            " WHERE day=? GROUP BY service", (today,)
+        ).fetchall()
+        all_time = conn.execute("SELECT SUM(usd) AS total FROM spend").fetchone()
+        recent = conn.execute(
+            "SELECT day, SUM(usd) AS usd FROM spend GROUP BY day ORDER BY day DESC LIMIT 14"
+        ).fetchall()
+    return {
+        "today": spend_today(),
+        "all_time": round(all_time["total"] or 0.0, 2),
+        "by_service": {r["service"]: {"usd": round(r["usd"], 2), "units": r["units"]}
+                       for r in by_service},
+        "recent": [dict(r) for r in recent],
+    }
 
 
 # --------------------------------------------------------------------------
@@ -243,8 +307,7 @@ def existing_keys() -> set:
     return {k for row in rows for k in (row["key_phone"], row["key_name"]) if k}
 
 
-def list_leads(search: str = "", city: str = "", category: str = "",
-               only_no_website: bool = False, limit: int = 500):
+def _lead_filters(search: str, city: str, category: str, only_no_website: bool):
     clauses, params = [], []
     if search:
         clauses.append("(business_name LIKE ? OR address LIKE ?)")
@@ -257,12 +320,39 @@ def list_leads(search: str = "", city: str = "", category: str = "",
         params.append(category)
     if only_no_website:
         clauses.append("(website IS NULL OR website = '')")
-    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    return (f"WHERE {' AND '.join(clauses)}" if clauses else ""), params
+
+
+def list_leads(search: str = "", city: str = "", category: str = "",
+               only_no_website: bool = False, limit: int = 100, offset: int = 0):
+    where, params = _lead_filters(search, city, category, only_no_website)
     with connect() as conn:
         return conn.execute(
-            f"SELECT * FROM leads {where} ORDER BY priority_score DESC, id DESC LIMIT ?",
-            params + [limit],
+            f"SELECT * FROM leads {where} ORDER BY priority_score DESC, id DESC"
+            f" LIMIT ? OFFSET ?",
+            params + [limit, offset],
         ).fetchall()
+
+
+def count_leads(search: str = "", city: str = "", category: str = "",
+                only_no_website: bool = False) -> int:
+    where, params = _lead_filters(search, city, category, only_no_website)
+    with connect() as conn:
+        return conn.execute(f"SELECT COUNT(*) AS n FROM leads {where}", params).fetchone()["n"]
+
+
+def iter_leads(search: str = "", city: str = "", category: str = "",
+               only_no_website: bool = False):
+    """Streams rows for CSV export so a large result set never sits in memory."""
+    where, params = _lead_filters(search, city, category, only_no_website)
+    with connect() as conn:
+        cursor = conn.execute(
+            f"SELECT * FROM leads {where} ORDER BY priority_score DESC, id DESC", params)
+        while True:
+            chunk = cursor.fetchmany(500)
+            if not chunk:
+                return
+            yield from chunk
 
 
 def distinct_values(column: str) -> list:

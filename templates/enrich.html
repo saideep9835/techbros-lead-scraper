@@ -19,21 +19,24 @@
 <div class="grid cols-4" style="margin-bottom:16px">
   <div class="stat">
     <div class="stat-label">Total leads</div>
-    <div class="stat-value" id="s-total">{{ stats.total }}</div>
+    <div class="stat-value">{{ stats.total }}</div>
   </div>
   <div class="stat">
     <div class="stat-label">Enriched</div>
-    <div class="stat-value" id="s-enriched">{{ stats.enriched }}</div>
+    <div class="stat-value">{{ stats.enriched }}</div>
     <div class="stat-note">cached — never re-analyzed</div>
   </div>
   <div class="stat">
     <div class="stat-label">Email drafts</div>
-    <div class="stat-value" id="s-drafts">{{ stats.drafts }}</div>
+    <div class="stat-value">{{ stats.drafts }}</div>
     <div class="stat-note">leads with no phone</div>
   </div>
   <div class="stat">
-    <div class="stat-label">Failed</div>
-    <div class="stat-value" id="s-failed">{{ stats.failed }}</div>
+    <div class="stat-label">Spent today</div>
+    <div class="stat-value">${{ "%.2f"|format(spend.today) }}</div>
+    <div class="stat-note">
+      {% if limit_usd %}of ${{ "%.2f"|format(limit_usd) }} limit{% else %}no daily limit set{% endif %}
+    </div>
   </div>
 </div>
 
@@ -48,65 +51,39 @@
       <label for="force" style="margin:0">Re-analyze ones already done</label>
     </div>
     <div class="filter-item" style="padding-bottom:1px">
-      <button class="btn" type="submit" id="run-btn"
-              {% if state.running or not has_key %}disabled{% endif %}>
-        {% if state.running %}Running…{% else %}Analyze leads{% endif %}
-      </button>
+      <button class="btn" type="submit" {% if not has_key %}disabled{% endif %}>Analyze leads</button>
     </div>
   </div>
   <p class="muted" style="margin:14px 0 0">
     Highest-priority leads go first. Already-enriched leads are skipped, so
     running this repeatedly never costs you twice for the same business.
+    {% if stats.failed %}
+      <br><strong>{{ stats.failed }}</strong> lead(s) failed last time and will be retried automatically.
+    {% endif %}
   </p>
 </form>
 
 <div class="card">
-  <h2>Activity</h2>
-  <div class="log" id="log">
-    {% for line in state.log %}<div class="{{ line.level }}">{{ line.message }}</div>{% endfor %}
-    {% if not state.log %}<div class="muted">Nothing run yet.</div>{% endif %}
+  <h2>Recent runs</h2>
+  {% if recent %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Started</th><th>Type</th><th>Status</th><th>Progress</th><th></th></tr></thead>
+      <tbody>
+        {% for run in recent %}
+        <tr>
+          <td class="num muted">{{ run.started_at | short_time }}</td>
+          <td>{{ run.kind }}</td>
+          <td><span class="status-dot status-{{ run.status }}"></span>{{ run.status }}</td>
+          <td class="num">{{ run.done_searches }}/{{ run.total_searches }}</td>
+          <td><a href="{{ url_for('run_detail', run_id=run.id) }}">details</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
   </div>
-  <div id="done-actions" style="margin-top:18px;{% if not state.summary %}display:none{% endif %}">
-    <a class="btn secondary" href="{{ url_for('leads') }}">View leads</a>
-    <a class="btn secondary" href="{{ url_for('drafts') }}">View email drafts</a>
-  </div>
+  {% else %}
+    <p class="muted" style="margin:0">Nothing run yet.</p>
+  {% endif %}
 </div>
-{% endblock %}
-
-{% block scripts %}
-<script>
-  const RUNNING = {{ 'true' if state.running else 'false' }};
-  const logEl = document.getElementById('log');
-
-  async function poll() {
-    try {
-      const res = await fetch('/api/enrich');
-      const data = await res.json();
-
-      logEl.innerHTML = data.log.length
-        ? data.log.map(l => `<div class="${l.level}"></div>`).join('')
-        : '<div class="muted">Nothing run yet.</div>';
-      data.log.forEach((l, i) => { logEl.children[i].textContent = l.message; });
-      logEl.scrollTop = logEl.scrollHeight;
-
-      for (const [key, value] of Object.entries(data.stats)) {
-        const el = document.getElementById('s-' + key);
-        if (el) el.textContent = value;
-      }
-
-      if (!data.running) {
-        document.getElementById('run-btn').disabled = {{ 'false' if has_key else 'true' }};
-        document.getElementById('run-btn').textContent = 'Analyze leads';
-        if (data.summary) document.getElementById('done-actions').style.display = 'block';
-        return;
-      }
-      setTimeout(poll, 2000);
-    } catch (err) {
-      console.error('poll failed', err);
-      setTimeout(poll, 4000);
-    }
-  }
-
-  if (RUNNING) poll();
-</script>
 {% endblock %}

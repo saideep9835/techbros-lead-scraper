@@ -40,9 +40,17 @@ GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/interactions"
 # otherwise resolve to "" and be sent as the model name.
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL") or "gemini-3.8-flash"
 
-MAX_SITE_CHARS = 12000     # plenty for a small-business site; keeps tokens sane
+MAX_SITE_CHARS = 12000        # plenty for a small-business site; keeps tokens sane
+MAX_DOWNLOAD_BYTES = 2_000_000  # stop reading a page rather than pull a huge file
 REQUEST_TIMEOUT = 20
 PAUSE_BETWEEN_CALLS = 1.0
+
+MAX_ATTEMPTS = 4
+RETRY_STATUSES = {429, 500, 502, 503, 504}
+
+# Rough per-lead estimate for the spend ledger; override in .env if your real
+# invoice disagrees. Cost per lead is one Flash call over a truncated page.
+GEMINI_COST_PER_LEAD = float(os.environ.get("GEMINI_COST_PER_LEAD") or 0.002)
 
 SCRIPT_STYLE_RE = re.compile(r"<(script|style)\b.*?</\1>", re.S | re.I)
 TAG_RE = re.compile(r"<[^>]+>")
@@ -93,14 +101,25 @@ def fetch_page_text(url: str) -> str:
     if not is_public_url(url):
         return ""
     try:
-        resp = requests.get(url, timeout=REQUEST_TIMEOUT, allow_redirects=False,
-                            headers={"User-Agent": "Mozilla/5.0 (compatible; TechBrosLeadBot/1.0)"})
-        if resp.status_code != 200 or "html" not in resp.headers.get("Content-Type", ""):
-            return ""
+        # Streamed so an enormous or endless response is cut off mid-download
+        # rather than pulled fully into memory and truncated afterwards.
+        with requests.get(url, timeout=REQUEST_TIMEOUT, allow_redirects=False, stream=True,
+                          headers={"User-Agent": "Mozilla/5.0 (compatible; TechBrosLeadBot/1.0)"}) as resp:
+            if resp.status_code != 200 or "html" not in resp.headers.get("Content-Type", ""):
+                return ""
+            chunks, size = [], 0
+            for chunk in resp.iter_content(65536, decode_unicode=True):
+                if not chunk:
+                    continue
+                chunks.append(chunk if isinstance(chunk, str) else chunk.decode("utf-8", "ignore"))
+                size += len(chunk)
+                if size >= MAX_DOWNLOAD_BYTES:
+                    break
+            html = "".join(chunks)
     except requests.RequestException:
         return ""
 
-    text = SCRIPT_STYLE_RE.sub(" ", resp.text)
+    text = SCRIPT_STYLE_RE.sub(" ", html)
     text = TAG_RE.sub(" ", text)
     return " ".join(text.split())[:MAX_SITE_CHARS]
 
@@ -158,14 +177,29 @@ def call_gemini(prompt: str, api_key: str) -> dict:
             "schema": RESPONSE_SCHEMA,
         },
     }
-    resp = requests.post(
-        GEMINI_URL,
-        headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
-        json=payload,
-        timeout=60,
-    )
-    if resp.status_code != 200:
-        raise RuntimeError(f"Gemini HTTP {resp.status_code}: {resp.text[:300]}")
+
+    # A quota blip or a 503 shouldn't lose the lead — back off and try again.
+    last_error = None
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            resp = requests.post(
+                GEMINI_URL,
+                headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+                json=payload,
+                timeout=60,
+            )
+        except requests.RequestException as exc:
+            last_error = f"network error: {exc}"
+        else:
+            if resp.status_code == 200:
+                break
+            last_error = f"HTTP {resp.status_code}: {resp.text[:200]}"
+            if resp.status_code not in RETRY_STATUSES:
+                raise RuntimeError(f"Gemini {last_error}")
+        if attempt < MAX_ATTEMPTS:
+            time.sleep(2 ** attempt)  # 2s, 4s, 8s
+    else:
+        raise RuntimeError(f"Gemini failed after {MAX_ATTEMPTS} attempts — {last_error}")
 
     body = resp.json()
     text = body.get("output_text")
@@ -219,7 +253,7 @@ def retell_variables(lead: dict) -> dict:
     }
 
 
-def enrich_all(limit: int, force: bool, dry_run: bool, on_progress=None) -> dict:
+def enrich_all(limit: int, force: bool, dry_run: bool, run_id: int = None) -> dict:
     import db  # imported here so outreach.py can reuse is_public_url without pulling in the DB
 
     api_key = os.environ.get("GEMINI_API_KEY")
@@ -227,38 +261,70 @@ def enrich_all(limit: int, force: bool, dry_run: bool, on_progress=None) -> dict
         raise RuntimeError("GEMINI_API_KEY is not set — add it to your .env file.")
 
     leads = db.leads_needing_enrichment(limit, force)
+    if run_id:
+        db.set_total(run_id, len(leads))
     done = failed = drafted = 0
 
     for lead in leads:
         row = dict(lead)
         name = row.get("business_name", "?")
+
+        if run_id and db.cancel_requested(run_id):
+            _report(run_id, "Cancelled — stopping here.", "warn")
+            break
+
+        budget_error = None if dry_run else check_budget(GEMINI_COST_PER_LEAD)
+        if budget_error:
+            _report(run_id, budget_error, "error")
+            break
+
+        succeeded = 0
         try:
             if dry_run:
                 site = fetch_page_text(row.get("website") or "")
                 note = f"{len(site)} chars of site text" if site else "no website to read"
-                _report(on_progress, f"  would analyze {name} ({note})")
+                _report(run_id, f"  would analyze {name} ({note})")
                 done += 1
                 continue
 
             result = analyze_lead(row, api_key)
             db.save_enrichment(row["id"], result)
+            db.record_spend("gemini", 1, GEMINI_COST_PER_LEAD)
             done += 1
+            succeeded = 1
             if result.get("email_body"):
                 drafted += 1
             channel = "email draft" if result.get("email_body") else "call notes"
-            _report(on_progress, f"  {name} → {channel}")
+            _report(run_id, f"  {name} → {channel}")
             time.sleep(PAUSE_BETWEEN_CALLS)
         except Exception as exc:
             failed += 1
             db.save_enrichment_error(row["id"], str(exc)[:300])
-            _report(on_progress, f"  {name} failed: {exc}", "error")
+            _report(run_id, f"  {name} failed: {exc}", "error")
+        finally:
+            if run_id:
+                db.bump_progress(run_id, succeeded, 0)
 
     return {"enriched": done, "failed": failed, "drafts": drafted, "considered": len(leads)}
 
 
-def _report(callback, message: str, level: str = "info"):
-    if callback:
-        callback(message, level)
+def check_budget(next_cost: float) -> str | None:
+    """Returns an error message if this call would break the daily ceiling."""
+    import db
+    cap = float(os.environ.get("DAILY_SPEND_LIMIT_USD") or 0)
+    if cap <= 0:
+        return None
+    spent = db.spend_today()
+    if spent + next_cost > cap:
+        return (f"Daily spend limit reached — ${spent:.2f} of ${cap:.2f} used today. "
+                f"Raise DAILY_SPEND_LIMIT_USD in .env or wait until tomorrow.")
+    return None
+
+
+def _report(run_id, message: str, level: str = "info"):
+    if run_id:
+        import db
+        db.log(run_id, message, level)
     else:
         print(message)
 
@@ -277,6 +343,9 @@ def main():
         stats = enrich_all(args.limit, args.force, args.dry_run)
     except RuntimeError as exc:
         sys.exit(str(exc))
+
+    if not args.dry_run:
+        print(f"Spend today: ${db.spend_today():.2f}")
 
     if not stats["considered"]:
         print("Nothing to enrich — every lead already has content. Use --force to redo them.")

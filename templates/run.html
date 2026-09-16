@@ -2,13 +2,20 @@
 {% block title %}Search run{% endblock %}
 
 {% block content %}
-<h1>Search #{{ run.id }}</h1>
+{% set is_enrich = run.kind == 'enrich' %}
+
+<h1>{{ 'Enrichment' if is_enrich else 'Search' }} #{{ run.id }}</h1>
 <p class="subtitle">
-  {{ searches | length }} search{{ '' if searches|length == 1 else 'es' }},
-  up to {{ searches | sum(attribute='max_results') }} results —
+  {% if is_enrich %}
+    Analyzing up to {{ run.total_searches }} leads with Gemini —
+  {% else %}
+    {{ searches | length }} search{{ '' if searches|length == 1 else 'es' }},
+    up to {{ searches | sum(attribute='max_results') }} results —
+  {% endif %}
   started {{ run.started_at | short_time }}
 </p>
 
+{% if not is_enrich %}
 <details class="card" style="margin-bottom:16px">
   <summary style="cursor:pointer;font-weight:600">What this run is searching for</summary>
   <div class="table-wrap" style="margin-top:14px">
@@ -26,6 +33,7 @@
     </table>
   </div>
 </details>
+{% endif %}
 
 <div class="card" style="margin-bottom:16px">
   <div style="display:flex;align-items:center;gap:10px">
@@ -44,13 +52,18 @@
          style="width: {{ (run.done_searches / run.total_searches * 100) if run.total_searches else 0 }}%"></div>
   </div>
   <div class="muted" id="progress-text">
-    {{ run.done_searches }} of {{ run.total_searches }} searches complete
+    {{ run.done_searches }} of {{ run.total_searches }} {{ 'leads' if is_enrich else 'searches' }} complete
   </div>
 
   <div class="grid cols-4" style="margin-top:20px">
-    <div><div class="stat-label">New leads</div><div class="stat-value" id="new-leads" style="font-size:24px">{{ run.new_leads }}</div></div>
+    <div>
+      <div class="stat-label">{{ 'Enriched' if is_enrich else 'New leads' }}</div>
+      <div class="stat-value" id="new-leads" style="font-size:24px">{{ run.new_leads }}</div>
+    </div>
+    {% if not is_enrich %}
     <div><div class="stat-label">Already known</div><div class="stat-value" id="dupes" style="font-size:24px">{{ run.duplicate_leads }}</div></div>
-    <div><div class="stat-label">Searches</div><div class="stat-value" style="font-size:24px">{{ run.total_searches }}</div></div>
+    {% endif %}
+    <div><div class="stat-label">Total</div><div class="stat-value" style="font-size:24px">{{ run.total_searches }}</div></div>
     <div><div class="stat-label">Finished</div><div class="stat-value" id="finished" style="font-size:24px">{{ run.finished_at | short_time }}</div></div>
   </div>
 
@@ -64,6 +77,11 @@
   <div class="log" id="log"></div>
   <div id="done-actions" style="margin-top:18px;display:none">
     <a class="btn" href="{{ url_for('leads') }}">View leads</a>
+    {% if is_enrich %}
+      <a class="btn secondary" href="{{ url_for('drafts') }}">View email drafts</a>
+    {% else %}
+      <a class="btn secondary" href="{{ url_for('enrich_page') }}">Enrich these leads</a>
+    {% endif %}
     <a class="btn secondary" href="{{ url_for('leads_csv') }}">Download CSV</a>
   </div>
 </div>
@@ -104,7 +122,8 @@
       document.getElementById('progress-text').textContent =
         `${data.done} of ${data.total} searches complete`;
       document.getElementById('new-leads').textContent = data.new_leads;
-      document.getElementById('dupes').textContent = data.duplicates;
+      const dupesEl = document.getElementById('dupes');
+      if (dupesEl) dupesEl.textContent = data.duplicates;
       document.getElementById('status-text').textContent = data.status;
       document.getElementById('status-dot').className = 'status-dot status-' + data.status;
 

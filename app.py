@@ -16,7 +16,9 @@ import json
 import os
 import secrets
 import threading
-from datetime import datetime
+import time
+from collections import defaultdict
+from datetime import datetime, timedelta
 from functools import wraps
 
 from apify_client import ApifyClient
@@ -27,7 +29,7 @@ from flask import (Flask, Response, abort, flash, redirect, render_template,
 load_dotenv()  # must run before anything reads os.environ below
 
 import db
-from enrich import enrich_all
+from enrich import check_budget, enrich_all
 from prioritize_leads import score_and_pitch
 from scraper import (DATA_DIR, FIELDNAMES, MASTER_FILE, lead_keys,
                      normalize_item, run_apify_search)
@@ -37,13 +39,24 @@ PRIORITIZED_FIELDNAMES = FIELDNAMES + ["priority_score", "pitch_gap", "recommend
 COST_PER_RESULT = 0.01
 MAX_TOTAL_RESULTS = 1000  # hard ceiling so a typo can't spend hundreds of dollars
 MAX_PER_SEARCH = 200      # Apify's own per-run practical ceiling for this actor
+PAGE_SIZE = 100
+
+# Brute-force protection on the single shared password.
+LOGIN_MAX_ATTEMPTS = 8
+LOGIN_LOCKOUT_SECONDS = 300
+_login_attempts = defaultdict(list)
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY") or secrets.token_hex(32)
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",  # blocks cross-site POSTs that would spend Apify credit
+    PERMANENT_SESSION_LIFETIME=timedelta(days=7),
 )
+
+
+def daily_limit() -> float:
+    return float(os.environ.get("DAILY_SPEND_LIMIT_USD") or 0)
 
 
 # ---------------------------------------------------------------------------
@@ -66,17 +79,39 @@ def login_required(view):
     return wrapped
 
 
+def login_blocked(ip: str) -> int:
+    """Seconds left on a lockout, or 0. Keeps the shared password from being
+    guessable at machine speed once this is reachable off localhost."""
+    cutoff = time.time() - LOGIN_LOCKOUT_SECONDS
+    _login_attempts[ip] = [t for t in _login_attempts[ip] if t > cutoff]
+    if len(_login_attempts[ip]) >= LOGIN_MAX_ATTEMPTS:
+        return int(_login_attempts[ip][0] + LOGIN_LOCKOUT_SECONDS - time.time())
+    return 0
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if not os.environ.get("APP_PASSWORD"):
         return render_template("login.html", setup_needed=True)
+
     if request.method == "POST":
+        ip = request.remote_addr or "unknown"
+        wait = login_blocked(ip)
+        if wait > 0:
+            flash(f"Too many failed attempts. Try again in {wait // 60 + 1} minute(s).", "error")
+            return render_template("login.html", setup_needed=False)
+
         if check_password(request.form.get("password", "")):
+            _login_attempts.pop(ip, None)
             session["authed"] = True
             session.permanent = True
             target = request.args.get("next", "")
             return redirect(target if target.startswith("/") else url_for("dashboard"))
-        flash("Incorrect password.", "error")
+
+        _login_attempts[ip].append(time.time())
+        remaining = LOGIN_MAX_ATTEMPTS - len(_login_attempts[ip])
+        flash(f"Incorrect password. {remaining} attempt(s) before a temporary lockout."
+              if remaining > 0 else "Too many failed attempts — locked out for 5 minutes.", "error")
     return render_template("login.html", setup_needed=False)
 
 
@@ -112,6 +147,22 @@ def write_csvs(rows: list):
             writer.writerows(rows)
 
 
+APIFY_MAX_ATTEMPTS = 3
+
+
+def search_with_retry(client, keyword, city, want, lead_filter, min_rating, run_id):
+    """One flaky actor run shouldn't cost you the whole search."""
+    for attempt in range(1, APIFY_MAX_ATTEMPTS + 1):
+        try:
+            return run_apify_search(client, keyword, city, want, lead_filter, min_rating)
+        except Exception:
+            if attempt == APIFY_MAX_ATTEMPTS:
+                raise
+            delay = 2 ** attempt
+            db.log(run_id, f"  retrying in {delay}s (attempt {attempt} of {APIFY_MAX_ATTEMPTS})", "warn")
+            time.sleep(delay)
+
+
 def run_scrape(run_id: int, searches: list, lead_filter: str, min_rating: float, token: str):
     client = ApifyClient(token)
     seen = db.existing_keys()
@@ -130,14 +181,23 @@ def run_scrape(run_id: int, searches: list, lead_filter: str, min_rating: float,
                     write_csvs(collected)
                 return
 
+            budget_error = check_budget(want * COST_PER_RESULT)
+            if budget_error:
+                db.log(run_id, budget_error, "error")
+                db.finish_run(run_id, "cancelled", budget_error)
+                if collected:
+                    write_csvs(collected)
+                return
+
             db.log(run_id, f"Searching '{keyword}' in '{city}' (up to {want})…")
             try:
-                items = run_apify_search(client, keyword, city, want, lead_filter, min_rating)
+                items = search_with_retry(client, keyword, city, want, lead_filter, min_rating, run_id)
             except Exception as exc:
                 failures += 1
                 db.log(run_id, f"'{keyword}' in '{city}' failed: {exc}", "error")
                 db.bump_progress(run_id)
                 continue
+            db.record_spend("apify", len(items), len(items) * COST_PER_RESULT)
 
             fresh, dupes = [], 0
             for item in items:
@@ -180,7 +240,8 @@ def run_scrape(run_id: int, searches: list, lead_filter: str, min_rating: float,
 @login_required
 def dashboard():
     return render_template("dashboard.html", stats=db.stats(), runs=db.list_runs(8),
-                           top_leads=db.list_leads(limit=10))
+                           top_leads=db.list_leads(limit=10),
+                           spend=db.spend_summary(), limit_usd=daily_limit())
 
 
 @app.route("/search", methods=["GET", "POST"])
@@ -209,6 +270,12 @@ def search():
     error = validate_searches(searches, lead_filter)
     if error:
         flash(error, "error")
+        return page()
+
+    projected = sum(s["max_results"] for s in searches) * COST_PER_RESULT
+    budget_error = check_budget(projected)
+    if budget_error:
+        flash(budget_error, "error")
         return page()
 
     if db.active_run_id():
@@ -318,48 +385,42 @@ def cancel_run(run_id):
     return redirect(url_for("run_detail", run_id=run_id))
 
 
-enrich_state = {"running": False, "log": [], "summary": None}
-
-
-def run_enrichment(limit: int, force: bool):
-    enrich_state.update(running=True, log=[], summary=None)
+def run_enrichment(run_id: int, limit: int, force: bool):
+    """Progress lives in the runs table, not memory, so a restart mid-run leaves
+    a finished record instead of a page that spins forever."""
     try:
-        stats = enrich_all(limit, force, dry_run=False,
-                           on_progress=lambda msg, level="info":
-                               enrich_state["log"].append({"message": msg, "level": level}))
-        enrich_state["summary"] = stats
+        stats = enrich_all(limit, force, dry_run=False, run_id=run_id)
+        db.log(run_id, f"Finished. {stats['enriched']} enriched, "
+                       f"{stats['drafts']} email drafts, {stats['failed']} failed.", "success")
+        db.finish_run(run_id, "done")
     except Exception as exc:
-        enrich_state["log"].append({"message": str(exc), "level": "error"})
-        enrich_state["summary"] = {"error": str(exc)}
-    finally:
-        enrich_state["running"] = False
+        db.log(run_id, str(exc), "error")
+        db.finish_run(run_id, "error", str(exc))
 
 
 @app.route("/enrich", methods=["GET", "POST"])
 @login_required
 def enrich_page():
     if request.method == "POST":
-        if enrich_state["running"]:
+        active = db.active_run_id("enrich")
+        if active:
             flash("Enrichment is already running.", "error")
-        elif not os.environ.get("GEMINI_API_KEY"):
+            return redirect(url_for("run_detail", run_id=active))
+        if not os.environ.get("GEMINI_API_KEY"):
             flash("GEMINI_API_KEY is not set — add it to your .env file and restart.", "error")
-        else:
-            limit = request.form.get("limit", 25, type=int)
-            force = request.form.get("force") == "1"
-            threading.Thread(target=run_enrichment, args=(limit, force), daemon=True).start()
-            flash(f"Analyzing up to {limit} leads — this page updates as it goes.", "info")
-        return redirect(url_for("enrich_page"))
+            return redirect(url_for("enrich_page"))
+
+        limit = request.form.get("limit", 25, type=int)
+        force = request.form.get("force") == "1"
+        run_id = db.create_run([{"limit": limit, "force": force}], kind="enrich", total=limit)
+        db.log(run_id, f"Analyzing up to {limit} leads…")
+        threading.Thread(target=run_enrichment, args=(run_id, limit, force), daemon=True).start()
+        return redirect(url_for("run_detail", run_id=run_id))
 
     return render_template("enrich.html", stats=db.enrichment_stats(),
-                           state=enrich_state,
+                           spend=db.spend_summary(), limit_usd=daily_limit(),
+                           recent=db.list_runs(5),
                            has_key=bool(os.environ.get("GEMINI_API_KEY")))
-
-
-@app.route("/api/enrich")
-@login_required
-def enrich_status():
-    return {"running": enrich_state["running"], "log": enrich_state["log"],
-            "summary": enrich_state["summary"], "stats": db.enrichment_stats()}
 
 
 @app.route("/drafts")
@@ -372,10 +433,14 @@ def drafts():
 @login_required
 def leads():
     filters = current_filters()
+    page = max(1, request.args.get("page", 1, type=int))
+    total = db.count_leads(**filters)
+    pages = max(1, -(-total // PAGE_SIZE))
+    page = min(page, pages)
     return render_template(
         "leads.html",
-        leads=db.list_leads(**filters),
-        filters=filters,
+        leads=db.list_leads(**filters, limit=PAGE_SIZE, offset=(page - 1) * PAGE_SIZE),
+        filters=filters, page=page, pages=pages, total=total,
         cities=db.distinct_values("city_searched"),
         categories=db.distinct_values("category_searched"),
     )
@@ -384,15 +449,23 @@ def leads():
 @app.route("/leads.csv")
 @login_required
 def leads_csv():
-    rows = db.list_leads(**current_filters())
-    buffer = io.StringIO()
-    writer = csv.DictWriter(buffer, fieldnames=PRIORITIZED_FIELDNAMES, extrasaction="ignore")
-    writer.writeheader()
-    for row in rows:
-        writer.writerow({k: row[k] for k in PRIORITIZED_FIELDNAMES})
+    filters = current_filters()
+
+    def rows():
+        """Streamed a chunk at a time so a large export never sits in memory."""
+        buffer = io.StringIO()
+        writer = csv.DictWriter(buffer, fieldnames=PRIORITIZED_FIELDNAMES, extrasaction="ignore")
+        writer.writeheader()
+        yield buffer.getvalue()
+        for row in db.iter_leads(**filters):
+            buffer.seek(0)
+            buffer.truncate(0)
+            writer.writerow({k: row[k] for k in PRIORITIZED_FIELDNAMES})
+            yield buffer.getvalue()
+
     today = datetime.now(db.LOCAL_TZ).strftime("%Y-%m-%d")
     return Response(
-        buffer.getvalue(),
+        rows(),
         mimetype="text/csv",
         headers={"Content-Disposition": f'attachment; filename="leads_{today}.csv"'},
     )

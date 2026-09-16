@@ -370,3 +370,12 @@ input:focus, textarea:focus, select:focus {
   color: var(--text-secondary);
 }
 .remove-row:hover { color: var(--critical); border-color: var(--critical); }
+
+/* ---------- Pagination ---------- */
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  margin-top: 18px;
+}
