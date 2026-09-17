@@ -20,8 +20,16 @@
 <div class="card call-sheet" style="margin-bottom:16px">
   <h2>Call sheet</h2>
 
+  <div class="field-label">Every call starts the same way</div>
+  <blockquote class="opener fixed-open">“Hi, this is Alex calling from Tech Bros
+    Website Studio. Do you have a quick minute to talk?”</blockquote>
+  <p class="muted" style="margin:6px 0 0;font-size:12px">
+    Fixed for every lead — no pitch until they say yes. Edit it in
+    <code>retell_agent_prompt.txt</code>.
+  </p>
+
   {% if lead.ai_call_opener %}
-    <div class="field-label">Open with</div>
+    <div class="field-label" style="margin-top:18px">Then, once they agree to talk</div>
     <blockquote class="opener">{{ lead.ai_call_opener }}</blockquote>
   {% endif %}
 

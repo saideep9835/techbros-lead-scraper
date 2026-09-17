@@ -407,3 +407,9 @@ input:focus, textarea:focus, select:focus {
 }
 .result-row:last-of-type { border-bottom: none; padding-bottom: 0; }
 .result-row:first-of-type { padding-top: 0; }
+
+.opener.fixed-open {
+  background: var(--plane);
+  border-left-color: var(--baseline);
+  font-size: 15px;
+}

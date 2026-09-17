@@ -63,7 +63,8 @@ RESPONSE_SCHEMA = {
         "hooks": {"type": "array", "items": {"type": "string"},
                   "description": "2-4 specific, concrete talking points for this business."},
         "call_opener": {"type": "string",
-                        "description": "One natural spoken sentence to open the call."},
+                        "description": "One spoken sentence saying why we called this "
+                                       "business, used AFTER they agree to talk. Not a greeting."},
         "email_subject": {"type": "string"},
         "email_body": {"type": "string"},
     },
@@ -205,7 +206,10 @@ Write outreach material for this specific business. Requirements:
 told above. Getting that wrong loses the call immediately.
 - If they have no website, lead with what they're missing out on, using their \
 review count and rating as evidence that they already have real customers.
-- call_opener: one sentence, natural spoken English, no jargon, under 30 words.
+- call_opener: this is NOT a greeting. The agent has already introduced itself \
+and been given permission to talk. This is the one sentence that follows, saying \
+why we called this particular business. Natural spoken English, no jargon, under \
+30 words, and it should invite a reply rather than launch into a pitch.
 - email_body: short and personal. No greeting line like "Dear Sir/Madam". \
 Do not include a signature or unsubscribe line; those are added automatically.
 - Honest and low-pressure. We are asking for a short conversation, not closing a sale."""
@@ -291,7 +295,9 @@ def retell_variables(lead: dict) -> dict:
         "business_name": lead.get("business_name") or "there",
         "business_category": lead.get("category_searched") or "local",
         "recommended_pitch": lead.get("recommended_pitch") or "website",
-        "call_opener": lead.get("ai_call_opener") or "",
+        # The greeting is fixed in the agent prompt; this is what follows once
+        # they've agreed to talk.
+        "pitch_line": lead.get("ai_call_opener") or "",
         "business_summary": lead.get("ai_summary") or "",
         "talking_points": "; ".join(hooks) if hooks else (lead.get("pitch_gap") or ""),
     }
