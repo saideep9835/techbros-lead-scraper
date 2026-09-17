@@ -355,6 +355,21 @@ def iter_leads(search: str = "", city: str = "", category: str = "",
             yield from chunk
 
 
+def leads_for_run(run_id: int, kind: str, limit: int = 25) -> list:
+    """What a run produced. A scrape owns its leads by run_id; enrichment
+    updates leads in place, so it shows the most recently enriched instead."""
+    with connect() as conn:
+        if kind == "enrich":
+            return conn.execute(
+                "SELECT * FROM leads WHERE enriched_at IS NOT NULL"
+                " ORDER BY enriched_at DESC, priority_score DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return conn.execute(
+            "SELECT * FROM leads WHERE run_id = ? ORDER BY priority_score DESC LIMIT ?",
+            (run_id, limit),
+        ).fetchall()
+
+
 def get_lead(lead_id: int):
     with connect() as conn:
         return conn.execute("SELECT * FROM leads WHERE id = ?", (lead_id,)).fetchone()

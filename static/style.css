@@ -399,3 +399,11 @@ input:focus, textarea:focus, select:focus {
   border-radius: 8px;
   margin-top: 6px;
 }
+
+/* ---------- Run results preview ---------- */
+.result-row {
+  padding: 14px 0;
+  border-bottom: 1px solid var(--grid);
+}
+.result-row:last-of-type { border-bottom: none; padding-bottom: 0; }
+.result-row:first-of-type { padding-top: 0; }

@@ -75,7 +75,7 @@
 <div class="card">
   <h2>Activity</h2>
   <div class="log" id="log"></div>
-  <div id="done-actions" style="margin-top:18px;display:none">
+  <div id="done-actions" style="margin-top:18px;{% if run.status == 'running' %}display:none{% endif %}">
     <a class="btn" href="{{ url_for('leads') }}">View leads</a>
     {% if is_enrich %}
       <a class="btn secondary" href="{{ url_for('drafts') }}">View email drafts</a>
@@ -85,6 +85,43 @@
     <a class="btn secondary" href="{{ url_for('leads_csv') }}">Download CSV</a>
   </div>
 </div>
+
+{% if results %}
+<div class="card" style="margin-top:16px">
+  <h2>{{ 'What Gemini wrote' if is_enrich else 'Leads found' }}</h2>
+  {% for lead in results %}
+    <div class="result-row">
+      <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+        <a href="{{ url_for('lead_detail', lead_id=lead.id) }}"
+           style="font-weight:600">{{ lead.business_name }}</a>
+        <span class="badge {% if lead.priority_score >= 120 %}hot{% else %}plain{% endif %}">
+          {{ lead.priority_score or 0 }}
+        </span>
+        <span class="muted">{{ lead.category_searched }} · {{ lead.city_searched }}</span>
+        <div style="flex:1"></div>
+        {% if lead.phone %}<span class="num muted">{{ lead.phone }}</span>{% endif %}
+      </div>
+
+      {% if lead.ai_call_opener %}
+        <blockquote class="opener" style="margin-top:10px">{{ lead.ai_call_opener }}</blockquote>
+      {% elif lead.ai_summary %}
+        <p class="muted" style="margin:8px 0 0">{{ lead.ai_summary }}</p>
+      {% elif lead.pitch_gap %}
+        <p class="muted" style="margin:8px 0 0">{{ lead.pitch_gap }}</p>
+      {% endif %}
+
+      {% if lead.draft_email_subject %}
+        <p class="muted" style="margin:8px 0 0;font-size:12px">
+          Email draft ready — <a href="{{ url_for('lead_detail', lead_id=lead.id) }}">read it</a>
+        </p>
+      {% endif %}
+    </div>
+  {% endfor %}
+  <p class="muted" style="margin:14px 0 0;font-size:12px">
+    Click any business for its full call sheet.
+  </p>
+</div>
+{% endif %}
 {% endblock %}
 
 {% block scripts %}

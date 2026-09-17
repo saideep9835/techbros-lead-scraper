@@ -52,6 +52,7 @@ app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",  # blocks cross-site POSTs that would spend Apify credit
     PERMANENT_SESSION_LIFETIME=timedelta(days=7),
+    TEMPLATES_AUTO_RELOAD=True,  # edit a page and just refresh; no restart needed
 )
 
 
@@ -354,7 +355,8 @@ def run_detail(run_id):
     run = db.get_run(run_id)
     if not run:
         abort(404)
-    return render_template("run.html", run=run, searches=json.loads(run["searches"]))
+    return render_template("run.html", run=run, searches=json.loads(run["searches"]),
+                           results=db.leads_for_run(run_id, run["kind"]))
 
 
 @app.route("/api/runs/<int:run_id>")
