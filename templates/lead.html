@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block title %}{{ lead.business_name }}{% endblock %}
+
+{% block content %}
+<p style="margin:0 0 10px"><a href="{{ url_for('leads') }}">← Back to leads</a></p>
+
+<div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap">
+  <h1 style="margin:0">{{ lead.business_name }}</h1>
+  <span class="badge {% if lead.priority_score >= 120 %}hot{% else %}plain{% endif %}">
+    score {{ lead.priority_score or 0 }}
+  </span>
+</div>
+<p class="subtitle">
+  {{ lead.category_searched }} · {{ lead.city_searched }}
+  {% if lead.rating %} · {{ lead.rating }}★{% endif %}
+  {% if lead.review_count %} · {{ "{:,}".format(lead.review_count) }} reviews{% endif %}
+</p>
+
+{% if lead.enriched_at %}
+<div class="card call-sheet" style="margin-bottom:16px">
+  <h2>Call sheet</h2>
+
+  {% if lead.ai_call_opener %}
+    <div class="field-label">Open with</div>
+    <blockquote class="opener">{{ lead.ai_call_opener }}</blockquote>
+  {% endif %}
+
+  {% if lead.ai_summary %}
+    <div class="field-label" style="margin-top:18px">What they do</div>
+    <p style="margin:6px 0 0">{{ lead.ai_summary }}</p>
+  {% endif %}
+
+  {% if hooks %}
+    <div class="field-label" style="margin-top:18px">Talking points</div>
+    <ul class="hooks">
+      {% for hook in hooks %}<li>{{ hook }}</li>{% endfor %}
+    </ul>
+  {% endif %}
+
+  {% if lead.draft_email_subject %}
+    <div class="field-label" style="margin-top:18px">Draft email — subject</div>
+    <div class="quoted">{{ lead.draft_email_subject }}</div>
+    <div class="field-label" style="margin-top:12px">Draft email — body</div>
+    <div class="quoted" style="white-space:pre-wrap">{{ lead.draft_email_body }}</div>
+  {% endif %}
+
+  <p class="muted" style="margin:18px 0 0;font-size:12px">
+    Written by Gemini on {{ lead.enriched_at | short_time }}. Treat it as a
+    prompt, not a script — if the person contradicts it, believe the person.
+  </p>
+</div>
+{% else %}
+<div class="card" style="margin-bottom:16px">
+  <h2>Call sheet</h2>
+  {% if lead.enrich_error %}
+    <p class="muted" style="margin:0 0 10px">Enrichment failed for this lead:</p>
+    <div class="quoted" style="color:var(--critical)">{{ lead.enrich_error }}</div>
+    <p class="muted" style="margin:12px 0 0">It'll be retried automatically on the next run.</p>
+  {% else %}
+    <p class="muted" style="margin:0">
+      Not enriched yet. Falling back to the scored pitch line:
+    </p>
+    <blockquote class="opener">{{ lead.pitch_gap or 'No pitch angle available.' }}</blockquote>
+  {% endif %}
+  <a class="btn secondary" href="{{ url_for('enrich_page') }}" style="margin-top:14px">Run enrichment</a>
+</div>
+{% endif %}
+
+<div class="grid cols-2">
+  <div class="card">
+    <h2>Contact</h2>
+    <table>
+      <tbody>
+        <tr><th style="width:130px">Phone</th>
+            <td>{% if lead.phone %}<a href="tel:{{ lead.phone }}">{{ lead.phone }}</a>{% else %}<span class="muted">none — email only</span>{% endif %}</td></tr>
+        <tr><th>Address</th><td>{{ lead.address or '—' }}</td></tr>
+        <tr><th>Website</th>
+            <td>{% if lead.website %}<a href="{{ lead.website }}" target="_blank" rel="noopener noreferrer nofollow">{{ lead.website }}</a>{% else %}<span class="badge good">none</span>{% endif %}</td></tr>
+        <tr><th>Google Maps</th>
+            <td>{% if lead.google_maps_url %}<a href="{{ lead.google_maps_url }}" target="_blank" rel="noopener noreferrer nofollow">open listing</a>{% else %}—{% endif %}</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>What Retell receives</h2>
+    <p class="muted" style="margin:0 0 12px;font-size:12px">
+      Exactly the dynamic variables sent with the call, so you can see what the
+      agent has to work with before dialing.
+    </p>
+    <table>
+      <tbody>
+        {% for key, value in variables.items() %}
+        <tr>
+          <th style="width:150px">{{ key }}</th>
+          <td>{% if value %}{{ value }}{% else %}<span class="muted">empty</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

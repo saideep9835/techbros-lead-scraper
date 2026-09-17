@@ -29,7 +29,7 @@ from flask import (Flask, Response, abort, flash, redirect, render_template,
 load_dotenv()  # must run before anything reads os.environ below
 
 import db
-from enrich import check_budget, enrich_all
+from enrich import check_budget, enrich_all, retell_variables
 from prioritize_leads import score_and_pitch
 from scraper import (DATA_DIR, FIELDNAMES, MASTER_FILE, lead_keys,
                      normalize_item, run_apify_search)
@@ -426,7 +426,9 @@ def enrich_page():
 @app.route("/drafts")
 @login_required
 def drafts():
-    return render_template("drafts.html", drafts=db.list_drafts())
+    return render_template("drafts.html", drafts=db.list_drafts(),
+                           stats=db.enrichment_stats(),
+                           no_phone=db.count_leads_without_phone())
 
 
 @app.route("/leads")
@@ -444,6 +446,22 @@ def leads():
         cities=db.distinct_values("city_searched"),
         categories=db.distinct_values("category_searched"),
     )
+
+
+@app.route("/leads/<int:lead_id>")
+@login_required
+def lead_detail(lead_id):
+    lead = db.get_lead(lead_id)
+    if not lead:
+        abort(404)
+    hooks = []
+    if lead["ai_hooks"]:
+        try:
+            hooks = json.loads(lead["ai_hooks"])
+        except json.JSONDecodeError:
+            hooks = []
+    return render_template("lead.html", lead=lead, hooks=hooks,
+                           variables=retell_variables(dict(lead)))
 
 
 @app.route("/leads.csv")

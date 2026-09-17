@@ -50,10 +50,28 @@
   {% endfor %}
 {% else %}
   <div class="card empty">
-    <p><strong>No drafts yet.</strong></p>
-    <p>Drafts are written for leads that have no phone number, when you run
-      enrichment.</p>
-    <a class="btn" href="{{ url_for('enrich_page') }}">Go to Enrich</a>
+    {% if stats.total == 0 %}
+      <p><strong>No leads yet.</strong></p>
+      <p>Run a search first, then enrich the results.</p>
+      <a class="btn" href="{{ url_for('search') }}">New Search</a>
+    {% elif no_phone == 0 %}
+      <p><strong>Nothing to draft — and that's good news.</strong></p>
+      <p>All {{ stats.total }} of your leads have a phone number, so every one
+        of them gets <em>called</em> instead. Drafts only appear for leads with
+        no phone, which is rare in Google Maps data.</p>
+      <p class="muted">The AI writeup for callable leads lives on each lead's
+        page as a call sheet.</p>
+      <a class="btn" href="{{ url_for('leads') }}">View leads</a>
+    {% elif stats.enriched == 0 %}
+      <p><strong>{{ no_phone }} lead(s) have no phone number.</strong></p>
+      <p>Run enrichment and they'll get email drafts here.</p>
+      <a class="btn" href="{{ url_for('enrich_page') }}">Go to Enrich</a>
+    {% else %}
+      <p><strong>No drafts yet.</strong></p>
+      <p>{{ no_phone }} lead(s) have no phone number but haven't been enriched
+        yet. Run enrichment to draft emails for them.</p>
+      <a class="btn" href="{{ url_for('enrich_page') }}">Go to Enrich</a>
+    {% endif %}
   </div>
 {% endif %}
 {% endblock %}

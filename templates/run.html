@@ -90,6 +90,10 @@
 {% block scripts %}
 <script>
   const RUN_ID = {{ run.id }};
+  // Was the run still going when this page was served? If it was already
+  // finished, there is nothing to poll for and nothing to refresh — reloading
+  // here would just reload again on every load, forever.
+  const WAS_RUNNING = {{ 'true' if run.status == 'running' else 'false' }};
   const logEl = document.getElementById('log');
   let lastId = 0;
   let polling = true;
@@ -120,7 +124,7 @@
       const pct = data.total ? (data.done / data.total * 100) : 0;
       document.getElementById('progress-fill').style.width = pct + '%';
       document.getElementById('progress-text').textContent =
-        `${data.done} of ${data.total} searches complete`;
+        `${data.done} of ${data.total} {{ 'leads' if is_enrich else 'searches' }} complete`;
       document.getElementById('new-leads').textContent = data.new_leads;
       const dupesEl = document.getElementById('dupes');
       if (dupesEl) dupesEl.textContent = data.duplicates;
@@ -130,8 +134,11 @@
       if (data.status !== 'running') {
         polling = false;
         document.getElementById('done-actions').style.display = 'block';
-        // Refresh once so the finished timestamp and any cancel button state settle.
-        setTimeout(() => window.location.reload(), 800);
+        // Only refresh if we actually watched it finish, so the cancel button
+        // and finished timestamp settle. Never on a page that loaded already
+        // done — that reloads again on every load, forever.
+        if (WAS_RUNNING) setTimeout(() => window.location.reload(), 800);
+        return;
       }
     } catch (err) {
       console.error('poll failed', err);

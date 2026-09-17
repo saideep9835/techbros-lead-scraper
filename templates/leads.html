@@ -56,7 +56,7 @@
     <table>
       <thead>
         <tr>
-          <th>Score</th><th>Business</th><th>Category</th><th>City</th>
+          <th>Score</th><th>Business</th><th>AI</th><th>Category</th><th>City</th>
           <th>Phone</th><th>Rating</th><th>Reviews</th><th>Website</th><th>Maps</th>
         </tr>
       </thead>
@@ -69,8 +69,21 @@
             </span>
           </td>
           <td>
-            {{ lead.business_name }}
-            {% if lead.pitch_gap %}<div class="muted" style="font-size:12px">{{ lead.pitch_gap }}</div>{% endif %}
+            <a href="{{ url_for('lead_detail', lead_id=lead.id) }}">{{ lead.business_name }}</a>
+            {% if lead.ai_call_opener %}
+              <div class="muted" style="font-size:12px">“{{ lead.ai_call_opener }}”</div>
+            {% elif lead.pitch_gap %}
+              <div class="muted" style="font-size:12px">{{ lead.pitch_gap }}</div>
+            {% endif %}
+          </td>
+          <td>
+            {% if lead.enriched_at %}
+              <span class="badge good" title="Call sheet ready">ready</span>
+            {% elif lead.enrich_error %}
+              <span class="badge hot" title="{{ lead.enrich_error }}">failed</span>
+            {% else %}
+              <span class="muted">—</span>
+            {% endif %}
           </td>
           <td class="muted">{{ lead.category_searched }}</td>
           <td class="muted">{{ lead.city_searched }}</td>

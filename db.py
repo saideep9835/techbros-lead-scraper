@@ -355,6 +355,11 @@ def iter_leads(search: str = "", city: str = "", category: str = "",
             yield from chunk
 
 
+def get_lead(lead_id: int):
+    with connect() as conn:
+        return conn.execute("SELECT * FROM leads WHERE id = ?", (lead_id,)).fetchone()
+
+
 def distinct_values(column: str) -> list:
     if column not in ("city_searched", "category_searched"):
         raise ValueError(f"not a filterable column: {column}")
@@ -433,6 +438,13 @@ def enrichment_stats() -> dict:
                FROM leads"""
         ).fetchone()
     return {k: row[k] or 0 for k in ("total", "enriched", "failed", "drafts")}
+
+
+def count_leads_without_phone() -> int:
+    with connect() as conn:
+        return conn.execute(
+            "SELECT COUNT(*) AS n FROM leads WHERE phone IS NULL OR phone = ''"
+        ).fetchone()["n"]
 
 
 def list_drafts(limit: int = 200) -> list:
