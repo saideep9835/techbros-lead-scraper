@@ -542,12 +542,20 @@ def from_json(value):
     return json.loads(value) if value else []
 
 
-if __name__ == "__main__":
+def startup():
+    """Both entry points need this — `python app.py` and a WSGI server like
+    gunicorn, which never executes the __main__ block."""
     db.init_db()
-    synced = db.sync_from_master_csv()
-    if synced:
-        print(f"Imported {synced} lead(s) from {MASTER_FILE.name}")
+    return db.sync_from_master_csv()
+
+
+synced_at_boot = startup()
+
+if __name__ == "__main__":
+    if synced_at_boot:
+        print(f"Imported {synced_at_boot} lead(s) from {MASTER_FILE.name}")
     if not os.environ.get("APP_PASSWORD"):
-        print("\n!! APP_PASSWORD is not set — the UI will refuse logins until you set it:")
-        print('   export APP_PASSWORD="something-only-you-know"\n')
-    app.run(host="127.0.0.1", port=int(os.environ.get("PORT", 8080)), debug=False)
+        print("\n!! APP_PASSWORD is not set — the UI will refuse logins until you set it.")
+        print("   Add it to your .env file.\n")
+    app.run(host=os.environ.get("HOST", "127.0.0.1"),
+            port=int(os.environ.get("PORT", 8080)), debug=False)

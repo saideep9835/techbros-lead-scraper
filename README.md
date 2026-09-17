@@ -33,14 +33,41 @@ Open `.env` and set at minimum:
 - `FLASK_SECRET_KEY` — generate one with
   `python -c "import secrets; print(secrets.token_hex(32))"`
 
-Then start it:
+Then start it. **With Docker** (recommended — no venv, keeps running in the
+background, survives reboots):
+
+```bash
+docker compose up -d --build
+```
+
+Or **without Docker**:
 
 ```bash
 source venv/bin/activate
 python app.py
 ```
 
-Open **http://127.0.0.1:8080** and sign in with your `APP_PASSWORD`.
+Either way, open **http://127.0.0.1:8080** and sign in with your `APP_PASSWORD`.
+
+### Docker day-to-day
+
+```bash
+docker compose up -d          # start (or restart after a code change)
+docker compose logs -f        # watch what it's doing
+docker compose restart        # pick up an edited template or config
+docker compose down           # stop it
+docker compose up -d --build  # rebuild after changing requirements.txt
+```
+
+Your leads live in `./data` on your Mac, mounted into the container — so
+`docker compose down` does **not** lose anything. `config.json` is mounted too,
+so you can edit a search without rebuilding.
+
+The container binds to `127.0.0.1` only, so nothing outside your machine can
+reach it. It runs gunicorn (not Flask's development server) as a non-root user,
+with a single worker on purpose: scrapes run as background threads, SQLite takes
+one writer, and the login rate limiter keeps counts in memory — multiple workers
+would break all three.
 
 > `.env` is gitignored, so it never gets committed. `.env.example` is the
 > template that *does* get committed — **never put real values in it.** Every
@@ -359,6 +386,7 @@ Secrets and variables → Actions):
 
 ```
 techbros-lead-scraper/
+├── Dockerfile  docker-compose.yml      # Run it as a container (recommended)
 ├── app.py                              # Web UI — search form, dashboard, lead browser
 ├── db.py                               # SQLite store behind the web UI
 ├── templates/  static/                 # Web UI pages and styling

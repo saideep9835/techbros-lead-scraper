@@ -1,0 +1,19 @@
+services:
+  app:
+    build: .
+    container_name: lead-scraper
+    # Bound to localhost only. Change to "8080:8080" to expose it on your
+    # network — but put HTTPS and a firewall in front first, and remember
+    # anyone who reaches it can spend your Apify credit.
+    ports:
+      - "127.0.0.1:8080:8080"
+    env_file:
+      - .env
+    volumes:
+      # Leads, the database and exported CSVs live here. Without this mount
+      # every lead disappears when the container is recreated.
+      - ./data:/app/data
+      # Editable without a rebuild, so you can tune a search or the outreach
+      # settings and just restart.
+      - ./config.json:/app/config.json:ro
+    restart: unless-stopped

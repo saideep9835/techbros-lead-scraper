@@ -1,0 +1,16 @@
+# Secrets never go into the image — they're passed at runtime via env_file.
+.env
+
+# Data lives in a mounted volume, not baked into the image.
+data/
+*.db
+*.db-wal
+*.db-shm
+
+venv/
+__pycache__/
+*.pyc
+.git/
+.github/
+.DS_Store
+*.md
