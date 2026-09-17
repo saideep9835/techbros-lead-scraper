@@ -28,7 +28,7 @@ import re
 import socket
 import sys
 import time
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import requests
 from dotenv import load_dotenv
@@ -92,13 +92,41 @@ def is_public_url(url: str) -> bool:
     return True
 
 
+MAX_REDIRECTS = 4
+
+
+def resolve_url(url: str) -> str | None:
+    """Follow redirects by hand, re-checking each hop against is_public_url.
+
+    Requests' own redirect following would skip that check, but refusing
+    redirects outright breaks almost every real site — plain http:// nearly
+    always 301s to https://.
+    """
+    for _ in range(MAX_REDIRECTS):
+        if not is_public_url(url):
+            return None
+        try:
+            resp = requests.head(url, timeout=REQUEST_TIMEOUT, allow_redirects=False,
+                                 headers={"User-Agent": "Mozilla/5.0 (compatible; TechBrosLeadBot/1.0)"})
+        except requests.RequestException:
+            return url  # some hosts refuse HEAD; let the GET decide
+        if resp.status_code not in (301, 302, 303, 307, 308):
+            return url
+        location = resp.headers.get("Location")
+        if not location:
+            return url
+        url = urljoin(url, location)
+    return None
+
+
 def fetch_page_text(url: str) -> str:
     """Return the visible text of a page, or '' if it can't be read safely."""
     if not url:
         return ""
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
-    if not is_public_url(url):
+    url = resolve_url(url)
+    if not url:
         return ""
     try:
         # Streamed so an enormous or endless response is cut off mid-download
@@ -134,11 +162,24 @@ def build_prompt(lead: dict, site_text: str) -> str:
                if has_phone else
                "They have NO phone number, so this lead can only be reached by EMAIL.")
 
+    has_website = bool((lead.get("website") or "").strip())
     if site_text:
         evidence = f"Here is the text of their website:\n---\n{site_text}\n---"
+    elif has_website:
+        # Critical: a failed fetch is NOT the same as having no website. Saying
+        # "you don't have a website" to someone who does loses the call in the
+        # first ten seconds.
+        evidence = ("They DO have a website, but we could not read it automatically. "
+                    "You know nothing about its contents. Do NOT say or imply they have no "
+                    "website, and do NOT guess what is on it. Pitch AI tools that work "
+                    "alongside an existing site, and ask about the site rather than "
+                    "asserting anything about it.")
     else:
-        evidence = ("They have NO website — that is the single most important fact about this "
-                    "lead, and the main reason we're contacting them.")
+        evidence = ("They have NO website listed on Google — that is the single most "
+                    "important fact about this lead, and the main reason we're contacting them.")
+
+    angle = ("Lead with the website pitch." if lead.get("recommended_pitch") == "website"
+             else "They already have a website, so do NOT offer to build one — lead with AI tools.")
 
     return f"""You are preparing outreach for Tech Bros Website Studio, a small studio that \
 builds websites for local businesses and adds AI tools (chat assistants, voice agents that \
@@ -155,12 +196,15 @@ The prospect:
 
 {evidence}
 
+{angle}
+
 Write outreach material for this specific business. Requirements:
 - Be concrete. Reference what THIS business actually does, not generic filler.
 - Never invent facts. If the website says nothing about a detail, leave it out.
+- Never assert anything about whether they have a website beyond what you were \
+told above. Getting that wrong loses the call immediately.
 - If they have no website, lead with what they're missing out on, using their \
 review count and rating as evidence that they already have real customers.
-- If they already have a website, do NOT offer to build one. Focus on AI tools instead.
 - call_opener: one sentence, natural spoken English, no jargon, under 30 words.
 - email_body: short and personal. No greeting line like "Dear Sir/Madam". \
 Do not include a signature or unsubscribe line; those are added automatically.
