@@ -16,15 +16,50 @@
   {% if lead.review_count %} · {{ "{:,}".format(lead.review_count) }} reviews{% endif %}
 </p>
 
+<div class="card" style="margin-bottom:16px">
+  <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+    {% if blocked %}
+      <span class="badge" style="background:var(--critical);color:#fff">Do not contact</span>
+      <span class="muted">This number is on your opt-out list, so calling is disabled.</span>
+    {% elif active_call_id %}
+      <a class="btn danger" href="{{ url_for('run_detail', run_id=active_call_id) }}">
+        A call is in progress — open it to stop
+      </a>
+    {% elif not can_call %}
+      <button class="btn" disabled>Call this lead</button>
+      <span class="muted">
+        {% if not lead.phone %}No phone number on this lead.
+        {% else %}RETELL_API_KEY isn't set — add it to .env and restart.{% endif %}
+      </span>
+    {% else %}
+      <form method="post" action="{{ url_for('call_lead', lead_id=lead.id) }}" style="margin:0"
+            onsubmit="return confirm('Place a real call to {{ lead.phone }} now?')">
+        <button class="btn" type="submit">
+          {{ 'Call again' if last_call else 'Call this lead' }}
+        </button>
+      </form>
+      <span class="muted">Alex dials {{ lead.phone }} from your Retell number.</span>
+    {% endif %}
+
+    {% if last_call %}
+      <div class="spacer" style="flex:1"></div>
+      <a class="muted" href="{{ url_for('run_detail', run_id=last_call.id) }}">
+        Last call: {{ last_call.status }} · {{ last_call.started_at | short_time }}
+      </a>
+    {% endif %}
+  </div>
+</div>
+
 {% if lead.enriched_at %}
 <div class="card call-sheet" style="margin-bottom:16px">
   <h2>Call sheet</h2>
 
-  <div class="field-label">Every call starts the same way</div>
-  <blockquote class="opener fixed-open">“Hi, this is Alex calling from Tech Bros
-    Website Studio. Do you have a quick minute to talk?”</blockquote>
+  <div class="field-label">Opening (wording depends on whether they already stated the business name)</div>
+  <blockquote class="opener fixed-open">“Hey! This is Alex calling from Tech Bros AI
+    Studio. Is this {{ lead.business_name }}? … Awesome — got a quick minute, or is now
+    a bad time?”</blockquote>
   <p class="muted" style="margin:6px 0 0;font-size:12px">
-    Fixed for every lead — no pitch until they say yes. Edit it in
+    No pitch until they say yes. Edit it in
     <code>retell_agent_prompt.txt</code>.
   </p>
 

@@ -57,7 +57,7 @@
       <thead>
         <tr>
           <th>Score</th><th>Business</th><th>AI</th><th>Category</th><th>City</th>
-          <th>Phone</th><th>Rating</th><th>Reviews</th><th>Website</th><th>Maps</th>
+          <th>Phone</th><th>Rating</th><th>Reviews</th><th>Website</th><th>Maps</th><th></th>
         </tr>
       </thead>
       <tbody>
@@ -100,6 +100,16 @@
           <td>
             {% if lead.google_maps_url %}
               <a href="{{ lead.google_maps_url }}" target="_blank" rel="noopener noreferrer nofollow">map</a>
+            {% else %}
+              <span class="muted">—</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if lead.phone %}
+              <form method="post" action="{{ url_for('call_lead', lead_id=lead.id) }}" style="margin:0"
+                    onsubmit="return confirm('Place a real call to {{ lead.phone }} now?')">
+                <button class="btn secondary" type="submit" style="padding:4px 10px;font-size:12px">call</button>
+              </form>
             {% else %}
               <span class="muted">—</span>
             {% endif %}

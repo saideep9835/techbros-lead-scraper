@@ -1,4 +1,4 @@
-# Tech Bros Website Studio — Daily Lead Scraper
+# Tech Bros AI Studio — Daily Lead Scraper
 
 Finds new local business leads every day (no website / low online presence)
 using Google Maps data via Apify, dedupes against everything you've already

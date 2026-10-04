@@ -3,10 +3,13 @@
 
 {% block content %}
 {% set is_enrich = run.kind == 'enrich' %}
+{% set is_call = run.kind == 'call' %}
 
-<h1>{{ 'Enrichment' if is_enrich else 'Search' }} #{{ run.id }}</h1>
+<h1>{{ 'Call' if is_call else ('Enrichment' if is_enrich else 'Search') }} #{{ run.id }}</h1>
 <p class="subtitle">
-  {% if is_enrich %}
+  {% if is_call %}
+    {{ searches[0].business_name if searches else 'Lead' }} —
+  {% elif is_enrich %}
     Analyzing up to {{ run.total_searches }} leads with Gemini —
   {% else %}
     {{ searches | length }} search{{ '' if searches|length == 1 else 'es' }},
@@ -15,7 +18,7 @@
   started {{ run.started_at | short_time }}
 </p>
 
-{% if not is_enrich %}
+{% if not is_enrich and not is_call %}
 <details class="card" style="margin-bottom:16px">
   <summary style="cursor:pointer;font-weight:600">What this run is searching for</summary>
   <div class="table-wrap" style="margin-top:14px">
@@ -41,9 +44,15 @@
     <strong id="status-text">{{ run.status }}</strong>
     <div class="spacer" style="flex:1"></div>
     {% if run.status == 'running' %}
-      <form method="post" action="{{ url_for('cancel_run', run_id=run.id) }}" style="margin:0">
-        <button class="btn danger" type="submit">Cancel run</button>
-      </form>
+      {% if is_call %}
+        <form method="post" action="{{ url_for('stop_call_run', run_id=run.id) }}" style="margin:0">
+          <button class="btn danger" type="submit">Stop call</button>
+        </form>
+      {% else %}
+        <form method="post" action="{{ url_for('cancel_run', run_id=run.id) }}" style="margin:0">
+          <button class="btn danger" type="submit">Cancel run</button>
+        </form>
+      {% endif %}
     {% endif %}
   </div>
 

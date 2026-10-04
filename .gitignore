@@ -8,4 +8,7 @@ venv/
 *.db-wal
 *.db-shm
 .DS_Store
-data/*_old_broken.csv
+# Real lead/call data stays local only — this repo is public.
+data/*.csv
+data/*.csv.bak
+data/archive/

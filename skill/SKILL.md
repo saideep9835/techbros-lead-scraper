@@ -1,13 +1,13 @@
 ---
 name: techbros-lead-scraper
-description: Use this skill whenever the user (Tech Bros Website Studio) asks to find new local business leads, run/check the daily Google Maps lead scraper, review today's new leads, draft outreach for scraped leads, or manage the lead-generation pipeline for Princeton TX and nearby cities. Trigger on phrases like "find me leads", "run the scraper", "check today's leads", "any new leads today", "draft outreach for these leads", or "update my lead list".
+description: Use this skill whenever the user (Tech Bros AI Studio) asks to find new local business leads, run/check the daily Google Maps lead scraper, review today's new leads, draft outreach for scraped leads, or manage the lead-generation pipeline for Princeton TX and nearby cities. Trigger on phrases like "find me leads", "run the scraper", "check today's leads", "any new leads today", "draft outreach for these leads", or "update my lead list".
 ---
 
-# Tech Bros Website Studio — Lead Generation Skill
+# Tech Bros AI Studio — Lead Generation Skill
 
 ## What this skill covers
 
-Tech Bros Website Studio builds websites and AI tools (chatbots, voice agents,
+Tech Bros AI Studio builds websites and AI tools (chatbots, voice agents,
 automations) for small businesses. Its main lead source is local businesses on
 Google Maps that have no website, an outdated website, or a low online
 presence — scraped daily via an automated Apify pipeline (see the parent
@@ -51,7 +51,7 @@ customer questions 24/7.
 Would you be open to a free 15-minute call to see if it's a fit?
 
 [Name]
-Tech Bros Website Studio
+Tech Bros AI Studio
 techbros.websitestudio@gmail.com
 ```
 

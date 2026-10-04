@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Tech Bros Website Studio — Lead Prioritizer
+Tech Bros AI Studio — Lead Prioritizer
 ================================================
 Runs BETWEEN scraper.py and outreach.py.
 

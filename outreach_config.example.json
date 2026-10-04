@@ -14,12 +14,16 @@
   "seconds_between_calls": 20,
   "_pacing_note": "max_calls_per_run is a safety cap so a bad config can't dial your whole list at once. Raise it only after a few good live runs. seconds_between_calls spaces the calls out so you aren't running dozens of simultaneous conversations.",
 
+  "call_poll_interval_seconds": 5,
+  "max_call_wait_seconds": 360,
+  "_call_wait_note": "outreach.py waits for each call to actually end (polling Retell) before dialing the next lead, so two real calls never run at once from the same from_number. max_call_wait_seconds is a safety cutoff in case a call gets stuck or a status update is lost — set it a bit above the Max Call Duration you configure in the Retell dashboard (e.g. duration 5 min -> wait 360s).",
+
   "enable_email": false,
-  "company_postal_address": "Tech Bros Website Studio, 123 Your Street, Your City, TX 75407",
+  "company_postal_address": "Tech Bros AI Studio, 123 Your Street, Your City, TX 75407",
   "_email_note": "enable_email is OFF by default. US CAN-SPAM requires a working opt-out and a real physical postal address on commercial email — outreach.py appends both automatically, but you must put your real address in company_postal_address before switching this on. Emailing addresses scraped off websites also carries real deliverability risk to your Gmail account; consider a proper email service once you scale.",
 
   "email_subject": "Quick question about {business_name}'s website",
-  "email_body_template": "Hey {business_name} team,\n\nI came across your business while looking at local companies and noticed you might not have a website up, or it could use a refresh.\n\nWe build websites for small businesses, and can also add in AI tools if you're interested \u2014 things like a chatbot that answers customer questions on your site, or a voice assistant that helps with scheduling, all running automatically in the background.\n\nWould you be open to a free, no-pressure 15-minute chat to see if it's a good fit? Happy to work around your schedule.\n\nBest,\nTech Bros Website Studio\ntechbros.websitestudio@gmail.com",
+  "email_body_template": "Hey {business_name} team,\n\nI came across your business while looking at local companies and noticed you might not have a website up, or it could use a refresh.\n\nWe build websites for small businesses, and can also add in AI tools if you're interested \u2014 things like a chatbot that answers customer questions on your site, or a voice assistant that helps with scheduling, all running automatically in the background.\n\nWould you be open to a free, no-pressure 15-minute chat to see if it's a good fit? Happy to work around your schedule.\n\nBest,\nTech Bros AI Studio\ntechbros.websitestudio@gmail.com",
 
   "smtp_server": "smtp.gmail.com",
   "smtp_port": 465,

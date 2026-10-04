@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tech Bros Website Studio — lead enrichment via Gemini.
+"""Tech Bros AI Studio — lead enrichment via Gemini.
 
 Runs AFTER a scrape. For each lead it reads the business's website (when there
 is one), then asks Gemini for call-ready talking points:
@@ -182,7 +182,7 @@ def build_prompt(lead: dict, site_text: str) -> str:
     angle = ("Lead with the website pitch." if lead.get("recommended_pitch") == "website"
              else "They already have a website, so do NOT offer to build one — lead with AI tools.")
 
-    return f"""You are preparing outreach for Tech Bros Website Studio, a small studio that \
+    return f"""You are preparing outreach for Tech Bros AI Studio, a small studio that \
 builds websites for local businesses and adds AI tools (chat assistants, voice agents that \
 handle scheduling and FAQs).
 

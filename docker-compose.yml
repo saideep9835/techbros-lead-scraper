@@ -16,4 +16,5 @@ services:
       # Editable without a rebuild, so you can tune a search or the outreach
       # settings and just restart.
       - ./config.json:/app/config.json:ro
+      - ./outreach_config.json:/app/outreach_config.json:ro
     restart: unless-stopped

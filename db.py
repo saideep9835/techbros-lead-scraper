@@ -134,6 +134,10 @@ ENRICH_COLUMNS = {
     "draft_email_body": "TEXT", "enrich_error": "TEXT",
 }
 
+# Added for dashboard-triggered calls: which lead a 'call' run is for, and the
+# Retell call id, which the Stop button needs to hang up a live call.
+RUN_COLUMNS = {"lead_id": "INTEGER", "call_id": "TEXT"}
+
 
 def init_db():
     with connect() as conn:
@@ -144,6 +148,10 @@ def init_db():
         for column, coltype in ENRICH_COLUMNS.items():
             if column not in existing:
                 conn.execute(f"ALTER TABLE leads ADD COLUMN {column} {coltype}")
+        existing_runs = {r[1] for r in conn.execute("PRAGMA table_info(runs)")}
+        for column, coltype in RUN_COLUMNS.items():
+            if column not in existing_runs:
+                conn.execute(f"ALTER TABLE runs ADD COLUMN {column} {coltype}")
     # A run left "running" by a crash or restart can never finish.
     with connect() as conn:
         conn.execute(
@@ -234,6 +242,37 @@ def active_run_id(kind: str = "scrape") -> int | None:
             (kind,),
         ).fetchone()
     return row["id"] if row else None
+
+
+def create_call_run(lead_id: int, business_name: str) -> int:
+    with connect() as conn:
+        cur = conn.execute(
+            "INSERT INTO runs (kind, started_at, status, searches, total_searches, lead_id)"
+            " VALUES ('call', ?, 'running', ?, 1, ?)",
+            (now_iso(), json.dumps([{"business_name": business_name}]), lead_id),
+        )
+        return cur.lastrowid
+
+
+def set_call_id(run_id: int, call_id: str):
+    """Stored as soon as Retell accepts the call, so the Stop button has
+    something to hang up even while the call is still connecting."""
+    with connect() as conn:
+        conn.execute("UPDATE runs SET call_id=? WHERE id=?", (call_id, run_id))
+
+
+def get_call_id(run_id: int) -> str | None:
+    with connect() as conn:
+        row = conn.execute("SELECT call_id FROM runs WHERE id=?", (run_id,)).fetchone()
+    return row["call_id"] if row else None
+
+
+def last_call_for_lead(lead_id: int):
+    with connect() as conn:
+        return conn.execute(
+            "SELECT * FROM runs WHERE kind='call' AND lead_id=? ORDER BY id DESC LIMIT 1",
+            (lead_id,),
+        ).fetchone()
 
 
 # --------------------------------------------------------------------------

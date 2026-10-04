@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tech Bros Website Studio — lead scraper web UI.
+"""Tech Bros AI Studio — lead scraper web UI.
 
 Run locally:
     cp .env.example .env    # then fill in your token and password
@@ -30,6 +30,9 @@ load_dotenv()  # must run before anything reads os.environ below
 
 import db
 from enrich import check_budget, enrich_all, retell_variables
+from outreach import (clean_phone, load_config, load_do_not_contact, stop_call,
+                      trigger_retell_call, wait_for_call_to_end,
+                      within_business_hours)
 from prioritize_leads import score_and_pitch
 from scraper import (DATA_DIR, FIELDNAMES, MASTER_FILE, lead_keys,
                      normalize_item, run_apify_search)
@@ -218,6 +221,10 @@ def run_scrape(run_id: int, searches: list, lead_filter: str, min_rating: float,
             db.log(run_id, f"  → {len(fresh)} new, {dupes} already known")
 
         if collected:
+            # outreach.py trusts the "prioritized" filename to mean sorted —
+            # match prioritize_leads.py's ordering so a web-UI scrape doesn't
+            # silently dial leads in scrape order instead of priority order.
+            collected.sort(key=lambda r: r["priority_score"], reverse=True)
             write_csvs(collected)
 
         if failures and failures == len(searches):
@@ -400,6 +407,100 @@ def run_enrichment(run_id: int, limit: int, force: bool):
         db.finish_run(run_id, "error", str(exc))
 
 
+def run_call(run_id: int, lead: dict, phone: str):
+    """Place one call and block until it ends, mirroring outreach.py. Runs in a
+    thread so the request returns immediately and the page can poll."""
+    try:
+        config = load_config()
+        status, detail = trigger_retell_call(config, lead, phone, dry_run=False)
+        if status != "CALLED":
+            db.log(run_id, f"Could not place the call: {detail}", "error")
+            db.finish_run(run_id, "error", detail)
+            return
+
+        call_id = detail
+        db.set_call_id(run_id, call_id)
+        db.log(run_id, f"Ringing {phone}…", "info")
+
+        end_status = wait_for_call_to_end(
+            call_id, os.environ.get("RETELL_API_KEY"),
+            config.get("call_poll_interval_seconds", 5),
+            config.get("max_call_wait_seconds", 240),
+        )
+        db.log(run_id, f"Call ended: {end_status}", "success")
+        db.bump_progress(run_id, 1, 0)
+        db.finish_run(run_id, "done")
+    except Exception as exc:
+        db.log(run_id, str(exc), "error")
+        db.finish_run(run_id, "error", str(exc))
+
+
+@app.route("/leads/<int:lead_id>/call", methods=["POST"])
+@login_required
+def call_lead(lead_id):
+    lead = db.get_lead(lead_id)
+    if not lead:
+        abort(404)
+    lead = dict(lead)
+
+    def refuse(message):
+        flash(message, "error")
+        return redirect(url_for("lead_detail", lead_id=lead_id))
+
+    phone = clean_phone(lead.get("phone") or "")
+    if not phone:
+        return refuse("This lead has no phone number.")
+    if not os.environ.get("RETELL_API_KEY"):
+        return refuse("RETELL_API_KEY is not set — add it to your .env file and restart.")
+
+    # Opt-outs are the one hard stop: never dial a number on this list.
+    if phone.lower() in load_do_not_contact():
+        return refuse("That number is on the do-not-contact list.")
+
+    active = db.active_run_id("call")
+    if active:
+        flash("A call is already in progress — stop it before starting another.", "error")
+        return redirect(url_for("run_detail", run_id=active))
+
+    try:
+        config = load_config()
+    except SystemExit as exc:
+        return refuse(str(exc))
+
+    if config.get("enforce_business_hours", True) and not within_business_hours(config):
+        flash("Heads up: it's outside your configured calling hours.", "info")
+
+    run_id = db.create_call_run(lead_id, lead.get("business_name") or "lead")
+    db.log(run_id, f"Calling {lead.get('business_name')} on {phone}…")
+    threading.Thread(target=run_call, args=(run_id, lead, phone), daemon=True).start()
+    return redirect(url_for("run_detail", run_id=run_id))
+
+
+@app.route("/calls/<int:run_id>/stop", methods=["POST"])
+@login_required
+def stop_call_run(run_id):
+    call_id = db.get_call_id(run_id)
+    if not call_id:
+        flash("That call hasn't connected yet — nothing to stop.", "error")
+        return redirect(url_for("run_detail", run_id=run_id))
+
+    ok, detail = stop_call(call_id)
+    if ok:
+        db.log(run_id, "Stopped from the dashboard.", "warn")
+        flash("Call stopped.", "info")
+    elif "can only stop an ongoing call" in detail.lower():
+        # It's still ringing, not yet answered — there's nothing to hang up
+        # on Retell's side yet. It'll resolve itself shortly (see
+        # wait_for_call_to_end's not_connected handling) rather than needing
+        # a second Stop attempt.
+        flash("Still ringing, hasn't connected yet — it'll clear on its own "
+             "in a few seconds once there's no answer.", "info")
+    else:
+        db.log(run_id, f"Could not stop the call: {detail}", "error")
+        flash(f"Could not stop the call: {detail}", "error")
+    return redirect(url_for("run_detail", run_id=run_id))
+
+
 @app.route("/enrich", methods=["GET", "POST"])
 @login_required
 def enrich_page():
@@ -462,8 +563,13 @@ def lead_detail(lead_id):
             hooks = json.loads(lead["ai_hooks"])
         except json.JSONDecodeError:
             hooks = []
+    phone = clean_phone(lead["phone"] or "")
     return render_template("lead.html", lead=lead, hooks=hooks,
-                           variables=retell_variables(dict(lead)))
+                           variables=retell_variables(dict(lead)),
+                           last_call=db.last_call_for_lead(lead_id),
+                           active_call_id=db.active_run_id("call"),
+                           blocked=bool(phone and phone.lower() in load_do_not_contact()),
+                           can_call=bool(phone) and bool(os.environ.get("RETELL_API_KEY")))
 
 
 @app.route("/leads.csv")

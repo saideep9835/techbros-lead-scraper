@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Tech Bros Website Studio — Daily Lead Scraper
+Tech Bros AI Studio — Daily Lead Scraper
 ================================================
 Runs a Google Maps lead-generation search (via Apify) across a configurable
 list of business keywords + cities, filters out leads you've already seen,

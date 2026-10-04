@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Tech Bros Website Studio — Automated Outreach
+Tech Bros AI Studio — Automated Outreach
 ================================================
 Runs AFTER scraper.py. Reads today's new leads and, for each one:
     - If a phone number exists -> triggers an outbound AI call via Retell AI
@@ -31,7 +31,7 @@ IMPORTANT — please read before turning this fully on:
       (e.g. TCPA in the US) depending on your state and how the calls are
       used. This script defaults to only calling within a configurable
       business-hours window, and the Retell agent prompt template identifies
-      itself as calling on behalf of Tech Bros Website Studio. You're
+      itself as calling on behalf of Tech Bros AI Studio. You're
       responsible for confirming compliance for your area — consider a quick
       check with a lawyer once you scale beyond testing.
     - Automatic emailing is OFF by default (enable_email in the config).
@@ -67,6 +67,8 @@ MANUAL_FOLLOWUP = DATA_DIR / "manual_followup.csv"
 DO_NOT_CONTACT = DATA_DIR / "do_not_contact.csv"
 
 RETELL_CREATE_CALL_URL = "https://api.retellai.com/v2/create-phone-call"
+RETELL_GET_CALL_URL = "https://api.retellai.com/v2/get-call/{call_id}"
+RETELL_STOP_CALL_URL = "https://api.retellai.com/v2/stop-call/{call_id}"
 
 EMAIL_RE = re.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+")
 
@@ -114,6 +116,36 @@ def load_leads(path: Path) -> list:
         sys.exit(f"Leads file not found: {path}. Run scraper.py first, or pass a CSV path as an argument.")
     with open(path, "r", newline="", encoding="utf-8") as f:
         return list(csv.DictReader(f))
+
+
+def load_enrichment() -> dict:
+    """Gemini's per-lead content is written to the database by enrich.py, but
+    leads are read from CSV — which has no ai_* columns. Without this lookup
+    retell_variables() sends an empty pitch_line on every call and the agent
+    falls back to its generic script.
+
+    Keyed by normalized phone. Imported lazily and failure-tolerant on purpose:
+    db pulls in scraper (and apify_client), so a missing database or a minimal
+    install degrades to CSV-only calling rather than stopping the run.
+    """
+    try:
+        import db
+        with db.connect() as conn:
+            rows = conn.execute(
+                "SELECT phone, ai_call_opener, ai_summary, ai_hooks FROM leads"
+                " WHERE ai_call_opener IS NOT NULL AND ai_call_opener != ''"
+            ).fetchall()
+    except Exception:
+        return {}
+
+    enriched = {}
+    for row in rows:
+        key = clean_phone(row["phone"])
+        if key:
+            enriched[key] = {"ai_call_opener": row["ai_call_opener"],
+                             "ai_summary": row["ai_summary"],
+                             "ai_hooks": row["ai_hooks"]}
+    return enriched
 
 
 def within_business_hours(config: dict) -> bool:
@@ -194,6 +226,75 @@ def trigger_retell_call(config: dict, lead: dict, phone: str, dry_run: bool) -> 
         return "FAILED", f"HTTP {resp.status_code}: {resp.text[:200]}"
     except Exception as e:
         return "FAILED", str(e)
+
+
+def stop_call(call_id: str) -> tuple:
+    """Hang up a call that's still in progress. Used by the dashboard's Stop
+    button — the agent ends calls on its own, so this is for when a human
+    watching it decides to pull the plug early."""
+    api_key = os.environ.get("RETELL_API_KEY")
+    if not api_key:
+        return False, "RETELL_API_KEY not set"
+    if not call_id:
+        return False, "no call_id to stop"
+    try:
+        resp = requests.post(
+            RETELL_STOP_CALL_URL.format(call_id=call_id),
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=15,
+        )
+    except requests.RequestException as exc:
+        return False, str(exc)
+    # 204 is the documented success; 200 accepted too in case that changes.
+    if resp.status_code in (200, 204):
+        return True, "call stopped"
+    return False, f"HTTP {resp.status_code}: {resp.text[:200]}"
+
+
+def wait_for_call_to_end(call_id: str, api_key: str, poll_interval: int, max_wait: int) -> str:
+    """Block until Retell reports the call has ended, so the next lead isn't
+    dialed while this one is still live on the same from_number — calls are
+    triggered one at a time, but Retell runs them async, so without this the
+    script moves on after the API accepts the call, not after it finishes.
+
+    Falls back to a time-based cutoff if status never settles (a lost
+    webhook, a stuck call) so one bad call can't hang the whole run forever —
+    max_call_wait_seconds should be set a bit above whatever max call
+    duration is configured in Retell's agent settings.
+    """
+    if not call_id:
+        return "unknown (no call_id — couldn't confirm it ended)"
+
+    deadline = time.monotonic() + max_wait
+    consecutive_errors = 0
+    while time.monotonic() < deadline:
+        time.sleep(poll_interval)
+        try:
+            resp = requests.get(
+                RETELL_GET_CALL_URL.format(call_id=call_id),
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=10,
+            )
+            consecutive_errors = 0
+            if resp.status_code == 200:
+                body = resp.json()
+                call_status = body.get("call_status")
+                reason = body.get("disconnection_reason")
+                if call_status in ("ended", "error"):
+                    return call_status
+                # not_connected covers two different things: the call still
+                # setting up (reason not set yet) and a no-answer/busy/failed
+                # dial that's genuinely over (reason set, e.g.
+                # dial_no_answer). Only the second is terminal — without this
+                # check, a lead who just doesn't pick up blocks the run for
+                # the full max_wait instead of freeing up in a few seconds.
+                if call_status == "not_connected" and reason:
+                    return reason
+        except requests.RequestException:
+            consecutive_errors += 1
+            if consecutive_errors >= 5:
+                return "unknown (lost contact with Retell while polling)"
+    return "timed out (still ongoing after max_call_wait_seconds — moving on anyway)"
 
 
 def find_email_on_website(website: str) -> str | None:
@@ -291,6 +392,7 @@ def main():
 
     already_contacted = load_already_contacted()
     blocked = load_do_not_contact()
+    enrichment = load_enrichment()
     email_enabled = config.get("enable_email", False)
     max_calls = args.limit if args.limit is not None else config.get("max_calls_per_run", 5)
     pause = config.get("seconds_between_calls", 20)
@@ -309,6 +411,8 @@ def main():
         name = lead.get("business_name", "Unknown")
         phone = clean_phone(lead.get("phone", ""))
         website = (lead.get("website") or "").strip()
+        if phone and phone in enrichment:
+            lead = {**lead, **enrichment[phone]}
 
         def defer(reason):
             manual_rows.append({"timestamp": now, "business_name": name, "phone": phone or "",
@@ -331,12 +435,23 @@ def main():
         if phone and (allow_calls and (not config.get("enforce_business_hours", True)
                                        or within_business_hours(config))):
             status, detail = trigger_retell_call(config, lead, phone, args.dry_run)
+            if status == "CALLED":
+                call_id = detail
+                print(f"  CALL  {name:<40} {phone:<15} -> ringing (call_id={call_id})")
+                end_status = wait_for_call_to_end(
+                    call_id, os.environ.get("RETELL_API_KEY"),
+                    config.get("call_poll_interval_seconds", 5),
+                    config.get("max_call_wait_seconds", 360),
+                )
+                detail = f"call_id={call_id}; ended={end_status}"
+                print(f"        {name:<40} {'':<15} -> {end_status}")
+            else:
+                print(f"  CALL  {name:<40} {phone:<15} -> {status}")
             log_rows.append({"timestamp": now, "business_name": name, "contact_method": "call",
                              "contact_value": phone, "status": status, "detail": detail})
             if status in ("CALLED", "DRY_RUN"):
                 called += 1
                 already_contacted.add(phone.lower())
-            print(f"  CALL  {name:<40} {phone:<15} -> {status}")
             if status == "CALLED" and pause:
                 time.sleep(pause)
             continue

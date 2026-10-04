@@ -143,6 +143,8 @@
           <td class="muted">
             {% if run.kind == 'enrich' %}
               Gemini enrichment, up to {{ run.total_searches }} leads
+            {% elif run.kind == 'call' %}
+              Call — {{ entries[0].business_name if entries else 'lead' }}
             {% else %}
               {{ entries | length }} search{{ '' if entries|length == 1 else 'es' }},
               up to {{ entries | sum(attribute='max_results') }} results
